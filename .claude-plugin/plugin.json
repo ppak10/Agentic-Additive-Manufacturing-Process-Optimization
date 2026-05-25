@@ -1,0 +1,28 @@
+{
+  "name": "agentic-sls",
+  "description": "Agentic process optimization for selective laser sintering (SLS) additive manufacturing.",
+  "version": "0.0.1",
+  "author": {
+    "name": "Peter Pak"
+  },
+  "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
+  "repository": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
+  "license": "MIT",
+  "keywords": ["sls", "additive-manufacturing", "process-optimization", "mcp"],
+  "mcpServers": {
+    "agentic-sls": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "run",
+        "-m",
+        "agentic_sls.mcp"
+      ],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}/src",
+        "AGENTIC_SLS_PROJECT_DIR": "$CLAUDE_PROJECT_DIR"
+      }
+    }
+  }
+}

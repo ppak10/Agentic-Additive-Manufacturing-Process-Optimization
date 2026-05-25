@@ -1,7 +1,19 @@
 [project]
-name = "agentic-additive-manufacturing-process-optimization"
-version = "0.1.0"
-description = "Add your description here"
+name = "agentic-sls"
+version = "0.0.1"
+description = "Agentic process optimization for selective laser sintering (SLS) additive manufacturing."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "mcp>=1.12.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
+Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"agentic_sls" = ["py.typed"]
