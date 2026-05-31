@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Moon, Sun, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPanel } from "@/panels/StatusPanel";
+import { CameraPanel } from "@/panels/CameraPanel";
 
 export function App() {
   const [dark, setDark] = useState(false);
@@ -26,6 +27,7 @@ export function App() {
         </div>
       </header>
       <main className="flex-1 overflow-auto">
+        <CameraPanel />
         <StatusPanel />
       </main>
     </div>

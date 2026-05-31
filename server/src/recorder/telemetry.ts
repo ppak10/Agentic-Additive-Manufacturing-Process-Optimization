@@ -93,11 +93,13 @@ export function startTelemetryRecorder(log: FastifyBaseLogger): void {
         log.info(`telemetry: connecting to ${config.INOVA_API_BASE_URL}/state/stream @ ${config.TELEMETRY_HZ}Hz`);
         for await (const frame of client.streamState(config.TELEMETRY_HZ)) {
           latestSnapshot = frame;
-          buffer.push(...expand(frame));
-          if (buffer.length >= BATCH_SIZE) {
-            await flush();
-          } else {
-            scheduleFlush(log);
+          if (currentBuildId() !== null) {
+            buffer.push(...expand(frame));
+            if (buffer.length >= BATCH_SIZE) {
+              await flush();
+            } else {
+              scheduleFlush(log);
+            }
           }
           backoff = 1000;
         }
