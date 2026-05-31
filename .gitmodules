@@ -1,3 +1,9 @@
 [submodule "datasets/Agentic-SLS"]
 	path = datasets/Agentic-SLS
 	url = git@hf.co:datasets/ppak10/Agentic-SLS
+[submodule "sls4all/SLS4All.Compact"]
+	path = sls4all/SLS4All.Compact
+	url = git@github.com:sls4all/SLS4All.Compact.git
+[submodule "sls4all/Inova-API-Plugin"]
+	path = sls4all/Inova-API-Plugin
+	url = git@github.com:ppak10/Inova-API-Plugin.git

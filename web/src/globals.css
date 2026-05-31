@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #fafafa;
+  --secondary-background: #ffffff;
+  --foreground: #000000;
+  --main-foreground: #000000;
+  --main: #ff7a05;
+  --border: #000000;
+  --ring: #000000;
+  --overlay: oklch(0% 0 0 / 0.8);
+  --shadow: 4px 4px 0px 0px var(--border);
+  --shadow-lg: 8px 8px 0px 0px var(--border);
+  --chart-1: #ff7a05;
+  --chart-2: #0099ff;
+  --chart-3: #ffbf00;
+  --chart-4: #00d696;
+  --chart-5: #7a83ff;
+}
+
+.dark {
+  --background: #1f1f1f;
+  --secondary-background: #000000;
+  --foreground: #e6e6e6;
+  --main-foreground: #322215;
+  --main: #eb6d00;
+  --border: #1c1917;
+  --ring: #ffffff;
+  --shadow: 4px 4px 0px 0px var(--border);
+  --shadow-lg: 8px 8px 0px 0px var(--border);
+  --chart-1: #ffffff;
+  --chart-2: #008ae5;
+  --chart-3: #e5ac00;
+  --chart-4: #00bd84;
+  --chart-5: #7a83ff;
+}
+
+@theme inline {
+  --color-main: var(--main);
+  --color-background: var(--background);
+  --color-secondary-background: var(--secondary-background);
+  --color-foreground: var(--foreground);
+  --color-main-foreground: var(--main-foreground);
+  --color-border: var(--border);
+  --color-overlay: var(--overlay);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --spacing-boxShadowX: 2px;
+  --spacing-boxShadowY: 2px;
+  --spacing-reverseBoxShadowX: -2px;
+  --spacing-reverseBoxShadowY: -2px;
+  --radius-base: 0px;
+  --shadow-shadow: var(--shadow);
+  --shadow-shadow-lg: var(--shadow-lg);
+  --font-weight-base: 500;
+  --font-weight-heading: 700;
+}
+
+@layer base {
+  html {
+    @apply bg-background;
+    overscroll-behavior: none;
+    height: 100%;
+  }
+
+  body {
+    @apply text-foreground font-base bg-background h-full;
+    font-family:
+      ui-monospace,
+      SFMono-Regular,
+      SF Mono,
+      Menlo,
+      Consolas,
+      Liberation Mono,
+      monospace;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+  }
+}
