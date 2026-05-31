@@ -21,8 +21,8 @@ function PositionCard({ s }: { s: StateSnapshot }) {
       <CardContent className="grid gap-1">
         <MetricRow label="x" value={s.position.x.toFixed(2)} />
         <MetricRow label="y" value={s.position.y.toFixed(2)} />
-        <MetricRow label="z1" value={s.position.z1.toFixed(2)} />
-        <MetricRow label="z2" value={s.position.z2.toFixed(2)} />
+        <MetricRow label="z1" value={(s.position.z1 / 1000).toFixed(3)} unit="mm" />
+        <MetricRow label="z2" value={(s.position.z2 / 1000).toFixed(3)} unit="mm" />
         <MetricRow label="r" value={s.position.r.toFixed(2)} />
       </CardContent>
     </Card>
