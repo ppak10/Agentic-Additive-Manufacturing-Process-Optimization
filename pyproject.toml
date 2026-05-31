@@ -6,11 +6,16 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.12.3",
+    "requests>=2.32",
 ]
 
 [project.urls]
 Homepage = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
 Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization/issues"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
