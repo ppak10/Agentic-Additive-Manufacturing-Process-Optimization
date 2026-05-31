@@ -13,14 +13,14 @@ from pathlib import Path
 
 from agentic_sls.inova.http import (
     DEFAULT_BASE_URL,
-    DEFAULT_CAMERA_UUID,
     default_builds_dir,
     monitor,
 )
+from agentic_sls.inova.videocamera import CLIENT_UUID
 
 
-def _next_c(out_dir: Path, camera_uuid: str) -> int:
-    image_dir = out_dir / "images" / camera_uuid
+def _next_c(out_dir: Path, client_uuid: str) -> int:
+    image_dir = out_dir / "images" / client_uuid
     if not image_dir.exists():
         return 0
     nums = [int(p.stem) for p in image_dir.glob("*.jpg") if p.stem.isdigit()]
@@ -34,8 +34,9 @@ def main() -> int:
     )
     ap.add_argument("--interval", type=float, default=1.0,
                     help="seconds between polls (default: 1)")
-    ap.add_argument("--uuid", default=DEFAULT_CAMERA_UUID,
-                    help=f"videocamera UUID (default: {DEFAULT_CAMERA_UUID})")
+    ap.add_argument("--uuid", default=CLIENT_UUID,
+                    help="videocamera client UUID (default: per-process uuid4); "
+                         "pass an existing UUID to resume that session's image dir")
     ap.add_argument("--url", default=DEFAULT_BASE_URL,
                     help=f"printer base URL (default: {DEFAULT_BASE_URL})")
     ap.add_argument("--out-dir", type=Path, default=None,
@@ -48,7 +49,7 @@ def main() -> int:
     start_c = args.start_c if args.start_c is not None else _next_c(out_dir, args.uuid)
 
     print(
-        f"monitor: url={args.url} camera={args.uuid} interval={args.interval}s "
+        f"monitor: url={args.url} uuid={args.uuid} interval={args.interval}s "
         f"start_c={start_c} out_dir={out_dir}",
         file=sys.stderr, flush=True,
     )
@@ -56,7 +57,7 @@ def main() -> int:
     try:
         for event in monitor(
             out_dir=out_dir,
-            camera_uuid=args.uuid,
+            client_uuid=args.uuid,
             interval=args.interval,
             base_url=args.url,
             start_c=start_c,

@@ -10,9 +10,12 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from agentic_sls.inova.http import (
-    DEFAULT_CAMERA_UUID,
     InovaClient,
     default_builds_dir,
+)
+from agentic_sls.inova.videocamera import (
+    CLIENT_UUID,
+    fetch_image,
     save_image,
 )
 
@@ -34,22 +37,23 @@ def inova_status() -> dict:
 @app.tool()
 def inova_capture_image(
     c: int = 0,
-    camera_uuid: str = DEFAULT_CAMERA_UUID,
+    client_uuid: str = CLIENT_UUID,
     out_dir: str | None = None,
 ) -> dict:
-    """Fetch one chamber-camera frame and write it to `<out_dir>/images/<camera_uuid>/<c:06d>.jpg`.
+    """Fetch one chamber-camera frame and write it to `<out_dir>/images/<client_uuid>/<c:06d>.jpg`.
 
     Defaults `out_dir` to `<project>/builds/`. Returns the saved path and byte
     size, or an empty result if no image was available.
     """
-    data = InovaClient().image(camera_uuid=camera_uuid, c=c)
+    client = InovaClient()
+    data = fetch_image(client.base_url, client_uuid, c, timeout=client.timeout)
     if data is None:
-        return {"saved": False, "camera_uuid": camera_uuid, "c": c}
+        return {"saved": False, "client_uuid": client_uuid, "c": c}
     target = Path(out_dir) if out_dir else default_builds_dir()
-    path = save_image(target, camera_uuid, c, data)
+    path = save_image(target, client_uuid, c, data)
     return {
         "saved": True,
-        "camera_uuid": camera_uuid,
+        "client_uuid": client_uuid,
         "c": c,
         "path": str(path),
         "bytes": len(data),
