@@ -14,10 +14,10 @@ function MetricRow({ label, value, unit }: { label: string; value: string | numb
   );
 }
 
-function PositionCard({ s }: { s: StateSnapshot }) {
+function PositionsCard({ s }: { s: StateSnapshot }) {
   return (
     <Card>
-      <CardHeader><CardTitle>Galvo position</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Positions</CardTitle></CardHeader>
       <CardContent className="grid gap-1">
         <MetricRow label="x" value={s.position.x.toFixed(2)} />
         <MetricRow label="y" value={s.position.y.toFixed(2)} />
@@ -34,31 +34,66 @@ function TempsCard({ s }: { s: StateSnapshot }) {
     <Card>
       <CardHeader><CardTitle>Temperatures</CardTitle></CardHeader>
       <CardContent className="grid gap-1">
-        {s.temperature.entries.map((e) => (
-          <MetricRow
-            key={e.id}
-            label={e.id}
-            value={`${e.currentTemperature.toFixed(1)}${e.targetTemperature != null ? ` / ${e.targetTemperature.toFixed(1)}` : ""}`}
-            unit="°C"
-          />
-        ))}
+        {s.temperature.entries.map((e) => {
+          const hasTarget = e.targetTemperature != null;
+          const value = hasTarget
+            ? `${e.currentTemperature.toFixed(1)} / ${e.targetTemperature!.toFixed(1)}`
+            : e.currentTemperature.toFixed(1);
+          return (
+            <div key={e.id} className="flex justify-between items-center text-xs">
+              <span className="opacity-70 flex items-center gap-1.5">
+                {hasTarget && (
+                  <span
+                    className={
+                      e.targetReached
+                        ? "inline-block size-1.5 rounded-full bg-main"
+                        : "inline-block size-1.5 rounded-full border border-border"
+                    }
+                    title={e.targetReached ? "target reached" : "target not reached"}
+                  />
+                )}
+                {e.id}
+              </span>
+              <span className="font-heading">
+                {value}
+                <span className="opacity-60 ml-1">°C</span>
+                <span className="opacity-40 ml-1.5 font-base">avg {e.averageTemperature.toFixed(1)}</span>
+              </span>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
 }
 
 function PowerCard({ s }: { s: StateSnapshot }) {
+  const pm = s.power.powerman;
+  const throttling = pm.requiredPower > pm.maxPower;
   return (
     <Card>
       <CardHeader>
         <CardTitle>Power</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-1">
-        <MetricRow
-          label="powerman"
-          value={`${s.power.powerman.currentPower.toFixed(0)} / ${s.power.powerman.maxPower.toFixed(0)}`}
-          unit="W"
-        />
+        <div className="flex justify-between text-xs">
+          <span className="opacity-70 flex items-center gap-1.5">
+            {throttling && (
+              <span
+                className="inline-block size-1.5 rounded-full bg-main"
+                title={`throttling: required ${pm.requiredPower.toFixed(0)}W exceeds max ${pm.maxPower.toFixed(0)}W`}
+              />
+            )}
+            powerman
+          </span>
+          <span className="font-heading">
+            {pm.currentPower.toFixed(0)} / {pm.requiredPower.toFixed(0)} / {pm.maxPower.toFixed(0)}
+            <span className="opacity-60 ml-1">W</span>
+          </span>
+        </div>
+        {pm.poweredPinsDescription && (
+          <div className="text-[10px] opacity-50 font-base break-words">{pm.poweredPinsDescription}</div>
+        )}
         {s.power.entries.map((e) => (
           <MetricRow key={e.id} label={e.id} value={e.power.toFixed(2)} />
         ))}
@@ -97,7 +132,7 @@ export function StatusPanel() {
 
       {snapshot ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-          <PositionCard s={snapshot.data} />
+          <PositionsCard s={snapshot.data} />
           <TempsCard s={snapshot.data} />
           <PowerCard s={snapshot.data} />
           <LightsCard s={snapshot.data} />

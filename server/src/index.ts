@@ -4,6 +4,8 @@ import { applySchema, pool } from "./db/pool.js";
 import { startTelemetryRecorder } from "./recorder/telemetry.js";
 import { startJobDetector } from "./recorder/job.js";
 import { startCameraRecorder } from "./recorder/camera.js";
+import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
+import { startPositionStreamRecorder } from "./recorder/positionStream.js";
 import { registerRoutes } from "./api/routes.js";
 
 const fastify = Fastify({ logger: true });
@@ -14,6 +16,8 @@ const start = async () => {
   startTelemetryRecorder(fastify.log);
   startJobDetector(fastify.log);
   startCameraRecorder(fastify.log);
+  startBedMatrixRecorder(fastify.log);
+  startPositionStreamRecorder(fastify.log);
   await fastify.listen({ port: config.SERVER_PORT, host: "0.0.0.0" });
 };
 

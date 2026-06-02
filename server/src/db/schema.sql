@@ -41,3 +41,19 @@ CREATE TABLE IF NOT EXISTS frames (
   embedding   vector(512)
 );
 CREATE INDEX IF NOT EXISTS frames_build_ts_idx ON frames (build_id, ts DESC);
+
+-- High-frequency raw position events from the plugin's
+-- WS /movement/position/stream (firmware native ~1 kHz, event-driven).
+-- Separate from telemetry because shape and rate differ; one wide row per
+-- sample is far cheaper than 6 skinny rows × 1 kHz.
+CREATE TABLE IF NOT EXISTS position_hf (
+  build_id    BIGINT REFERENCES builds(id) ON DELETE CASCADE,
+  ts          TIMESTAMPTZ NOT NULL,
+  x           DOUBLE PRECISION,
+  y           DOUBLE PRECISION,
+  z1          DOUBLE PRECISION,
+  z2          DOUBLE PRECISION,
+  r           DOUBLE PRECISION,
+  has_homed   BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS position_hf_build_ts_idx ON position_hf (build_id, ts DESC);

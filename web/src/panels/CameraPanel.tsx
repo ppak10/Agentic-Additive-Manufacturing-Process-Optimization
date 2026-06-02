@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { BedMatrixTile } from "@/panels/BedMatrixTile";
 
 function CameraTile({ title, src, intervalMs }: { title: string; src: string; intervalMs: number }) {
   const [tick, setTick] = useState(0);
@@ -29,9 +30,10 @@ function CameraTile({ title, src, intervalMs }: { title: string; src: string; in
 
 export function CameraPanel() {
   return (
-    <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
       <CameraTile title="Chamber" src="/api/camera/chamber.jpg" intervalMs={1000 / 24} />
       <CameraTile title="Thermal" src="/api/camera/thermal.gif" intervalMs={250} />
+      <BedMatrixTile />
       <CameraTile title="Galvo plot" src="/api/camera/galvo.png" intervalMs={250} />
     </div>
   );

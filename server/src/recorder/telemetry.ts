@@ -25,7 +25,7 @@ function expand(frame: Timed<StateSnapshot>): Row[] {
   const s = frame.data;
 
   for (const k of ["x", "y", "z1", "z2", "r"] as const) {
-    rows.push({ buildId, ts, sensorId: "galvo", kind: `position.${k}`, value: s.position[k] });
+    rows.push({ buildId, ts, sensorId: "positions", kind: `position.${k}`, value: s.position[k] });
   }
 
   rows.push({ buildId, ts, sensorId: "lights", kind: "lights.enabled", value: s.lights.isEnabled ? 1 : 0 });
