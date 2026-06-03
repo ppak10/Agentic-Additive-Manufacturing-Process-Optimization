@@ -9,6 +9,7 @@ import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { getLatestSnapshot } from "../recorder/telemetry.js";
 import { getLatestPrintingStatus } from "../recorder/job.js";
+import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
 
 async function dirSizeBytes(dir: string): Promise<number> {
   let total = 0;
@@ -213,5 +214,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   };
 
   app.get("/api/temperature/bedmatrix/stream", { websocket: true }, proxyPluginWs("/temperature/bedmatrix/stream"));
-  app.get("/api/movement/position/stream", { websocket: true }, proxyPluginWs("/movement/position/stream"));
+
+  // Position stream uses fan-out from the recorder (not a per-client proxy)
+  // because the firmware's PositionChangedHighFrequency AsyncEvent only
+  // delivers to the first subscriber. See positionStream.ts comment.
+  app.get("/api/movement/position/stream", { websocket: true }, (client) => {
+    const send = (rawFrame: string) => {
+      if (client.readyState === 1) client.send(rawFrame);
+    };
+    addPositionSubscriber(send);
+    client.on("close", () => removePositionSubscriber(send));
+    client.on("error", () => removePositionSubscriber(send));
+  });
 }

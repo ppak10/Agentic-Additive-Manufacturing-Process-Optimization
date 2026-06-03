@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { currentBuildId } from "./state.js";
+import { currentBuildId, isShuttingDown } from "./state.js";
 
 type Kind = "chamber" | "thermal" | "galvo";
 
@@ -47,11 +47,13 @@ async function captureOne(source: Source, buildId: number, log: FastifyBaseLogge
     const absPath = resolve(config.FRAMES_DIR, relPath);
     await mkdir(dirname(absPath), { recursive: true });
     await writeFile(absPath, buf);
+    if (isShuttingDown()) return;
     await pool.query(
       `INSERT INTO frames (build_id, ts, kind, path) VALUES ($1, $2, $3, $4)`,
       [buildId, ts, source.kind, relPath],
     );
   } catch (err) {
+    if (isShuttingDown()) return;
     log.warn({ err, kind: source.kind }, "frame capture failed");
   }
 }

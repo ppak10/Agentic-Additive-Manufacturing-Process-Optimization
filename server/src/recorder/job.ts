@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { setCurrentBuildId } from "./state.js";
+import { setCurrentBuildId, isShuttingDown } from "./state.js";
 
 interface PrintingStatus {
   phase: string | null;
@@ -42,6 +42,43 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 function isActive(s: PrintingStatus, firmware: FirmwareStatus | null): boolean {
   if (firmware?.isPrinting) return true;
   return s.phase !== null || s.jobName !== null;
+}
+
+// Adopt an existing in-progress build for the current jobName if one exists,
+// otherwise open a new one. Fixes the orphaned-builds bug where every server
+// restart used to create a duplicate row for the same physical job. Also
+// closes any older orphans for the same job so the table stays tidy.
+async function findOrOpenBuild(
+  ps: PrintingStatus,
+  fw: FirmwareStatus | null,
+  log: FastifyBaseLogger,
+): Promise<number> {
+  if (ps.jobName) {
+    const { rows } = await pool.query<{ id: number }>(
+      `SELECT id FROM builds
+       WHERE job_name = $1 AND ended_at IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [ps.jobName],
+    );
+    if (rows.length > 0) {
+      const id = rows[0]!.id;
+      log.info({ buildId: id, jobName: ps.jobName }, "adopting in-progress build");
+      await pool.query(
+        `INSERT INTO events (build_id, kind, message, payload) VALUES ($1, $2, $3, $4)`,
+        [id, "build_resumed", `server reattached to ${ps.jobName}`, ps as unknown as Record<string, unknown>],
+      );
+      // Sweep any older orphans for this job into ended state so they stop
+      // polluting build lists and replay menus.
+      await pool.query(
+        `UPDATE builds SET ended_at = now(),
+           notes = COALESCE(notes || ' ', '') || '[closed at restart, replaced by build #' || $2 || ']'
+         WHERE job_name = $1 AND ended_at IS NULL AND id < $2`,
+        [ps.jobName, id],
+      );
+      return id;
+    }
+  }
+  return await openBuild(ps, fw, log, true);
 }
 
 async function openBuild(
@@ -110,10 +147,12 @@ export function startJobDetector(log: FastifyBaseLogger): void {
         const active = isActive(ps, fw);
 
         if (active && currentId === null) {
-          currentId = await openBuild(ps, fw, log, true);
+          if (isShuttingDown()) continue;
+          currentId = await findOrOpenBuild(ps, fw, log);
           setCurrentBuildId(currentId);
           prevPs = ps;
         } else if (!active && currentId !== null) {
+          if (isShuttingDown()) continue;
           await closeBuild(currentId, prevPs, log);
           setCurrentBuildId(null);
           currentId = null;

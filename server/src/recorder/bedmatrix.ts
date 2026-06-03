@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import WebSocket from "ws";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { currentBuildId } from "./state.js";
+import { currentBuildId, isShuttingDown } from "./state.js";
 
 interface BedMatrixFrame {
   respondedAt: string;
@@ -47,6 +47,7 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
     ws.on("message", async (raw) => {
       const buildId = currentBuildId();
       if (buildId === null) return; // not in a build; drop
+      if (isShuttingDown()) return;
       try {
         const frame = JSON.parse(raw.toString()) as BedMatrixFrame;
         const ts = new Date(frame.respondedAt);

@@ -2,7 +2,7 @@ import { InovaClient, type StateSnapshot, type Timed } from "@inova/client";
 import type { FastifyBaseLogger } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { currentBuildId } from "./state.js";
+import { currentBuildId, isShuttingDown } from "./state.js";
 
 type Row = {
   buildId: number | null;
@@ -51,6 +51,7 @@ function expand(frame: Timed<StateSnapshot>): Row[] {
 
 async function flush(): Promise<void> {
   if (buffer.length === 0) return;
+  if (isShuttingDown()) return;
   const rows = buffer;
   buffer = [];
   if (flushTimer) {

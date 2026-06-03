@@ -6,6 +6,7 @@ import { startJobDetector } from "./recorder/job.js";
 import { startCameraRecorder } from "./recorder/camera.js";
 import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
 import { startPositionStreamRecorder } from "./recorder/positionStream.js";
+import { markShuttingDown } from "./recorder/state.js";
 import { registerRoutes } from "./api/routes.js";
 
 const fastify = Fastify({ logger: true });
@@ -25,9 +26,13 @@ let shuttingDown = false;
 const shutdown = async (signal: string) => {
   if (shuttingDown) return;
   shuttingDown = true;
+  markShuttingDown(); // recorders see this and skip their pool.query() calls
   fastify.log.info({ signal }, "shutting down");
   try {
     await fastify.close();
+    // Brief grace period for recorder loops to observe the shutdown flag
+    // and bail out of mid-flight DB calls before we yank the pool out.
+    await new Promise((r) => setTimeout(r, 150));
     await pool.end();
   } finally {
     process.exit(0);
