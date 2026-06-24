@@ -5,8 +5,15 @@ node_modules/
 server/dist/
 web/dist/
 
-# Recorded telemetry frames
-data/
+# Recorded telemetry, frames, and DB volume — big and machine-specific.
+# data/exports/ is the cross-repo contract surface: the sidecar CSVs
+# (build_to_inova_session.csv, sensors.csv) ship with the repo so sibling
+# HuggingFace dataset repos can read them via relative path; the parquet
+# and jsonl payloads stay out (regenerable via scripts/export.py).
+/data/frames/
+/data/postgres/
+/data/exports/**/*.parquet
+/data/exports/**/*.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

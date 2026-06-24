@@ -6,6 +6,7 @@ import { startJobDetector } from "./recorder/job.js";
 import { startCameraRecorder } from "./recorder/camera.js";
 import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
 import { startPositionStreamRecorder } from "./recorder/positionStream.js";
+import { startPlotterStreamRecorder } from "./recorder/plotterStream.js";
 import { markShuttingDown } from "./recorder/state.js";
 import { registerRoutes } from "./api/routes.js";
 
@@ -19,6 +20,7 @@ const start = async () => {
   startCameraRecorder(fastify.log);
   startBedMatrixRecorder(fastify.log);
   startPositionStreamRecorder(fastify.log);
+  startPlotterStreamRecorder(fastify.log);
   await fastify.listen({ port: config.SERVER_PORT, host: "0.0.0.0" });
 };
 

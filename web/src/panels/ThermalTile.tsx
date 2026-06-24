@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExpandableCard } from "@/components/ui/expandable-card";
 import { useBedMatrix } from "@/hooks/useBedMatrix";
 import { cn } from "@/lib/utils";
 
@@ -134,19 +134,16 @@ type Tab = "raw" | "gif";
 export function ThermalTile() {
   const [tab, setTab] = useState<Tab>("raw");
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <span>Thermal</span>
-          <div className="ml-auto flex gap-1">
-            <TabButton active={tab === "raw"} onClick={() => setTab("raw")}>raw</TabButton>
-            <TabButton active={tab === "gif"} onClick={() => setTab("gif")}>gif</TabButton>
-          </div>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-2">
-        {tab === "raw" ? <RawMatrixView /> : <GifView />}
-      </CardContent>
-    </Card>
+    <ExpandableCard
+      title="Thermal"
+      headerRight={
+        <div className="flex gap-1">
+          <TabButton active={tab === "raw"} onClick={() => setTab("raw")}>raw</TabButton>
+          <TabButton active={tab === "gif"} onClick={() => setTab("gif")}>gif</TabButton>
+        </div>
+      }
+    >
+      {tab === "raw" ? <RawMatrixView /> : <GifView />}
+    </ExpandableCard>
   );
 }

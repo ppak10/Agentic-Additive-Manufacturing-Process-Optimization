@@ -15,6 +15,7 @@ export default defineConfig({
       "/api/stream": { target: "ws://localhost:3000", ws: true },
       "/api/temperature/bedmatrix/stream": { target: "ws://localhost:3000", ws: true },
       "/api/movement/position/stream": { target: "ws://localhost:3000", ws: true },
+      "/api/plotter/commands/stream": { target: "ws://localhost:3000", ws: true },
       "/api": { target: "http://localhost:3000" },
       "/healthz": { target: "http://localhost:3000" },
     },

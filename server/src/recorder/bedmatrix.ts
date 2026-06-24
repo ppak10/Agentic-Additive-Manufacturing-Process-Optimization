@@ -42,7 +42,7 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
   return new Promise<string>((resolveDone) => {
     const ws = new WebSocket(url);
     ws.on("open", () => log.info("bedmatrix: open"));
-    ws.on("error", (err) => log.error({ err }, "bedmatrix WS error"));
+    ws.on("error", (err) => log.error({ msg: (err as Error)?.message ?? String(err) }, "bedmatrix WS error"));
     ws.on("close", (code, reason) => resolveDone(`code=${code} reason=${reason.toString()}`));
     ws.on("message", async (raw) => {
       const buildId = currentBuildId();

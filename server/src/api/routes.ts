@@ -10,6 +10,8 @@ import { pool } from "../db/pool.js";
 import { getLatestSnapshot } from "../recorder/telemetry.js";
 import { getLatestPrintingStatus } from "../recorder/job.js";
 import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
+import { addPlotterSubscriber, removePlotterSubscriber } from "../recorder/plotterStream.js";
+import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
 
 async function dirSizeBytes(dir: string): Promise<number> {
   let total = 0;
@@ -42,12 +44,17 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/job/current", async () => getLatestPrintingStatus());
 
   app.get("/api/info", async (_req, reply) => {
+    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
     try {
       const r = await fetch(`${config.INOVA_API_BASE_URL}/info`);
       if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
       return await r.json();
     } catch (err) {
-      return reply.code(502).send({ error: "upstream unreachable", detail: String(err) });
+      tripUpstream(config.INOVA_API_BASE_URL);
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
     }
   });
 
@@ -176,11 +183,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return reply.type(mime).send(createReadStream(resolve(config.FRAMES_DIR, row.path)));
   });
 
+  // Camera proxy with circuit breaker on the firmware host. During an outage
+  // the browser keeps polling at ~24fps × 3 image kinds; without the breaker
+  // each poll spawned a fresh socket + threw a TypeError carrying a full
+  // multi-line stack which Fastify logged in full, accumulating heap pressure.
+  // Now we trip per-host for 2s on any failure and short-circuit subsequent
+  // requests so the cost of an outage is bounded.
   const cameraProxy = (path: string, mime: string) => async (_req: unknown, reply: any) => {
+    if (isUpstreamOpen(config.INOVA_FIRMWARE_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
     const url = `${config.INOVA_FIRMWARE_BASE_URL}${path}${randomUUID()}`;
-    const r = await fetch(url);
-    if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-    return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+      return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
+    } catch (err) {
+      tripUpstream(config.INOVA_FIRMWARE_BASE_URL);
+      // Log only the short message — full err includes a multi-line stack
+      // string that wedges the log buffer during sustained outages.
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+    }
   };
 
   app.get("/api/camera/chamber.jpg", cameraProxy("/api/videocamera/image/", "image/jpeg"));
@@ -225,5 +249,71 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     addPositionSubscriber(send);
     client.on("close", () => removePositionSubscriber(send));
     client.on("error", () => removePositionSubscriber(send));
+  });
+
+  // Plotter command stream — same fan-out pattern as position. Frames flow
+  // from the LoggingCodePlotter decorator in the plugin.
+  app.get("/api/plotter/commands/stream", { websocket: true }, (client) => {
+    const send = (rawFrame: string) => {
+      if (client.readyState === 1) client.send(rawFrame);
+    };
+    addPlotterSubscriber(send);
+    client.on("close", () => removePlotterSubscriber(send));
+    client.on("error", () => removePlotterSubscriber(send));
+  });
+
+  // Plotter info + layer command backfill: plain HTTP proxies to the plugin.
+  // Used by the frontend on mount to seed the canvas with what's already in
+  // the LoggingCodePlotter's in-memory ring buffer.
+  // Plugin proxy with the same circuit-breaker pattern keyed on the plugin
+  // host (port 5001) — independent of the firmware host (port 80).
+  const httpProxy = (upstreamPath: string) => async (_req: unknown, reply: any) => {
+    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
+    try {
+      const r = await fetch(`${config.INOVA_API_BASE_URL}${upstreamPath}`);
+      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+      return await r.json();
+    } catch (err) {
+      tripUpstream(config.INOVA_API_BASE_URL);
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+    }
+  };
+  app.get("/api/plotter/info", httpProxy("/plotter/info"));
+  app.get<{ Params: { idx: string }; Querystring: { since?: string } }>(
+    "/api/plotter/layer/:idx/commands",
+    async (req, reply) => {
+      const idx = Number.parseInt(req.params.idx, 10);
+      if (!Number.isFinite(idx)) return reply.code(400).send({ error: "bad layer idx" });
+      const since = req.query.since ? `?since=${encodeURIComponent(req.query.since)}` : "";
+      return httpProxy(`/plotter/layer/${idx}/commands${since}`)(req, reply);
+    },
+  );
+
+  // Post-build / Postgres-backed command backfill. Serves the recorded log
+  // for a specific build+layer; used for replay and frame-to-command
+  // correlation analysis. Limit capped to keep response sizes bounded.
+  app.get<{
+    Params: { id: string };
+    Querystring: { layer?: string; sinceCmdIdx?: string; limit?: string };
+  }>("/api/builds/:id/plotter/commands", async (req, reply) => {
+    const buildId = Number.parseInt(req.params.id, 10);
+    const layer = Number.parseInt(req.query.layer ?? "0", 10);
+    const since = Number.parseInt(req.query.sinceCmdIdx ?? "0", 10);
+    const limit = Math.min(Number.parseInt(req.query.limit ?? "10000", 10), 50000);
+    if (!Number.isFinite(buildId) || !Number.isFinite(layer) || !Number.isFinite(since) || !Number.isFinite(limit)) {
+      return reply.code(400).send({ error: "bad query" });
+    }
+    const { rows } = await pool.query(
+      `SELECT ts, layer_idx, cmd_idx, op, x, y, laser, speed, raw
+         FROM plotter_commands
+        WHERE build_id = $1 AND layer_idx = $2 AND cmd_idx >= $3
+        ORDER BY cmd_idx ASC
+        LIMIT $4`,
+      [buildId, layer, since, limit],
+    );
+    return { buildId, layer, sinceCmdIdx: since, limit, commands: rows };
   });
 }

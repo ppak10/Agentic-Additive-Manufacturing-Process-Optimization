@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExpandableCard } from "@/components/ui/expandable-card";
 import { Badge } from "@/components/ui/badge";
-import { useGalvoStream } from "@/hooks/useGalvoStream";
+import { useCommandStream } from "@/hooks/useCommandStream";
 import { cn } from "@/lib/utils";
-
-const ALPHA_BUCKETS = 8;
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -23,8 +21,14 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 function TraceView() {
-  const { pointsRef, connected, stats, clear } = useGalvoStream();
+  const { connected, stats, maxXY, frameSinceLastRead, clear } = useCommandStream();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Cross-frame pen state. lastX/lastY in mm bed coords; lastLaser is the
+  // most recent SET_LASER value (0..1), used to modulate stroke alpha when
+  // we draw a MOVE_XY.
+  const penRef = useRef<{ x: number | null; y: number | null; laser: number }>({
+    x: null, y: null, laser: 0,
+  });
 
   useEffect(() => {
     let stop = false;
@@ -36,7 +40,6 @@ function TraceView() {
       requestAnimationFrame(draw);
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const pts = pointsRef.current;
 
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth;
@@ -48,59 +51,65 @@ function TraceView() {
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.clearRect(0, 0, w, h);
 
-      if (pts.length < 2) return;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of pts) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
+      const delta = frameSinceLastRead();
+      if (delta.layerChanged) {
+        ctx.clearRect(0, 0, w, h);
+        penRef.current = { x: null, y: null, laser: 0 };
       }
-      const padX = Math.max((maxX - minX) * 0.05, 0.5);
-      const padY = Math.max((maxY - minY) * 0.05, 0.5);
-      minX -= padX; maxX += padX;
-      minY -= padY; maxY += padY;
-      const rangeX = Math.max(maxX - minX, 1e-9);
-      const rangeY = Math.max(maxY - minY, 1e-9);
+      if (delta.commands.length === 0) return;
 
-      const toX = (x: number) => ((x - minX) / rangeX) * w;
-      const toY = (y: number) => h - ((y - minY) / rangeY) * h;
+      // mm → canvas px, bed origin (0,0) → top-left. The firmware bed origin
+      // is bottom-left, so flip Y.
+      const toX = (mm: number) => (mm / maxXY) * w;
+      const toY = (mm: number) => h - (mm / maxXY) * h;
 
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = Math.max(1, dpr);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      const bucketSize = Math.ceil(pts.length / ALPHA_BUCKETS);
-      for (let bucket = 0; bucket < ALPHA_BUCKETS; bucket++) {
-        const alpha = 0.08 + 0.92 * (bucket / (ALPHA_BUCKETS - 1));
-        const start = bucket * bucketSize;
-        const end = Math.min(start + bucketSize + 1, pts.length);
-        if (end - start < 2) continue;
-        ctx.globalAlpha = alpha;
-        ctx.beginPath();
-        ctx.moveTo(toX(pts[start]!.x), toY(pts[start]!.y));
-        for (let i = start + 1; i < end; i++) {
-          ctx.lineTo(toX(pts[i]!.x), toY(pts[i]!.y));
+
+      const pen = penRef.current;
+      for (const cmd of delta.commands) {
+        if (cmd.op === "SET_LASER") {
+          pen.laser = cmd.laser ?? pen.laser;
+          continue;
         }
-        ctx.stroke();
+        if (cmd.op !== "MOVE_XY" || cmd.x === null || cmd.y === null) continue;
+        if (pen.x !== null && pen.y !== null) {
+          // Only render visible strokes — laser off (0) = invisible travel.
+          if (pen.laser > 0) {
+            ctx.globalAlpha = 0.15 + 0.85 * Math.min(1, pen.laser);
+            ctx.beginPath();
+            ctx.moveTo(toX(pen.x), toY(pen.y));
+            ctx.lineTo(toX(cmd.x), toY(cmd.y));
+            ctx.stroke();
+          }
+        }
+        pen.x = cmd.x;
+        pen.y = cmd.y;
       }
       ctx.globalAlpha = 1;
     };
     requestAnimationFrame(draw);
     return () => { stop = true; };
-  }, [pointsRef]);
+  }, [frameSinceLastRead, maxXY]);
+
+  const handleClear = () => {
+    clear();
+    const canvas = canvasRef.current;
+    if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    penRef.current = { x: null, y: null, laser: 0 };
+  };
 
   return (
     <>
       <div className="flex items-center gap-2 text-xs">
         <Badge variant={connected ? "default" : "neutral"}>
-          {connected ? `${stats.count} pts · ${stats.fps} Hz` : "off"}
+          {connected ? `layer ${stats.currentLayer} · ${stats.count} cmds · ${stats.fps} Hz` : "off"}
         </Badge>
         <button
-          onClick={clear}
+          onClick={handleClear}
           className="ml-auto text-xs underline opacity-70 hover:opacity-100"
           disabled={stats.count === 0}
         >
@@ -115,11 +124,11 @@ function TraceView() {
         />
         {stats.count === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-xs opacity-50 pointer-events-none">
-            waiting for motion…
+            waiting for commands…
           </div>
         )}
       </div>
-      {stats.latest && (
+      {stats.latest && stats.latest.op === "MOVE_XY" && stats.latest.x !== null && stats.latest.y !== null && (
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="flex justify-between">
             <span className="opacity-70">x</span>
@@ -132,7 +141,7 @@ function TraceView() {
         </div>
       )}
       <div className="text-[10px] opacity-50">
-        plots commanded stepper x/y from <code>PositionChangedHighFrequency</code>. Note: galvo raster moves don't fire this event — only homing and aux moves do. Real galvo trace lives on the PNG tab.
+        commands captured from <code>ICodePlotter.Process</code> — live laser path
       </div>
     </>
   );
@@ -162,19 +171,16 @@ type Tab = "png" | "trace";
 export function GalvoTile() {
   const [tab, setTab] = useState<Tab>("png");
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <span>Galvo</span>
-          <div className="ml-auto flex gap-1">
-            <TabButton active={tab === "png"} onClick={() => setTab("png")}>png</TabButton>
-            <TabButton active={tab === "trace"} onClick={() => setTab("trace")}>trace</TabButton>
-          </div>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-2">
-        {tab === "png" ? <PngView /> : <TraceView />}
-      </CardContent>
-    </Card>
+    <ExpandableCard
+      title="Galvo"
+      headerRight={
+        <div className="flex gap-1">
+          <TabButton active={tab === "png"} onClick={() => setTab("png")}>png</TabButton>
+          <TabButton active={tab === "trace"} onClick={() => setTab("trace")}>trace</TabButton>
+        </div>
+      }
+    >
+      {tab === "png" ? <PngView /> : <TraceView />}
+    </ExpandableCard>
   );
 }

@@ -111,7 +111,7 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
   return new Promise<string>((resolveDone) => {
     const ws = new WebSocket(url);
     ws.on("open", () => log.info("position_hf: open"));
-    ws.on("error", (err) => log.error({ err }, "position_hf WS error"));
+    ws.on("error", (err) => log.error({ msg: (err as Error)?.message ?? String(err) }, "position_hf WS error"));
     ws.on("close", (code, reason) => resolveDone(`code=${code} reason=${reason.toString()}`));
     ws.on("message", (raw) => {
       const rawStr = raw.toString();

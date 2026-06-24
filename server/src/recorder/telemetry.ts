@@ -106,7 +106,7 @@ export function startTelemetryRecorder(log: FastifyBaseLogger): void {
         }
         log.warn("telemetry stream closed cleanly, reconnecting");
       } catch (err) {
-        log.error({ err }, "telemetry stream error, reconnecting");
+        log.error({ msg: (err as Error)?.message ?? String(err) }, "telemetry stream error, reconnecting");
       }
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, 30000);

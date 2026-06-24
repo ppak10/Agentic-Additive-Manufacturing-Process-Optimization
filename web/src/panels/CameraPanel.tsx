@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExpandableCard } from "@/components/ui/expandable-card";
 import { ThermalTile } from "@/panels/ThermalTile";
 import { GalvoTile } from "@/panels/GalvoTile";
 
@@ -12,20 +12,19 @@ function CameraTile({ title, src, intervalMs }: { title: string; src: string; in
   }, [intervalMs]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
+    <ExpandableCard
+      title={
+        <>
           {title} <span className="opacity-50 font-base">· {Math.round(1000 / intervalMs)} fps</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <img
-          src={`${src}?c=${tick}`}
-          alt={title}
-          className="block w-full border-2 border-border bg-background object-contain"
-        />
-      </CardContent>
-    </Card>
+        </>
+      }
+    >
+      <img
+        src={`${src}?c=${tick}`}
+        alt={title}
+        className="block w-full border-2 border-border bg-background object-contain"
+      />
+    </ExpandableCard>
   );
 }
 

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { currentBuildId, isShuttingDown } from "./state.js";
+import { isUpstreamOpen, tripUpstream } from "./upstreamBreaker.js";
 
 type Kind = "chamber" | "thermal" | "galvo";
 
@@ -36,7 +37,16 @@ const SOURCES: Source[] = [
   },
 ];
 
+// Per-source warn rate limit. We log every Nth identical failure so an
+// outage doesn't flood the log with thousands of stack-trace-bearing lines.
+const FAIL_LOG_EVERY = 20;
+const failCounts: Record<Kind, number> = { chamber: 0, thermal: 0, galvo: 0 };
+
 async function captureOne(source: Source, buildId: number, log: FastifyBaseLogger): Promise<void> {
+  // Skip the fetch entirely if the firmware host's breaker is open. Without
+  // this the recorder hammers a downed firmware at full rate, mirroring the
+  // browser-side fetch storm.
+  if (isUpstreamOpen(config.INOVA_FIRMWARE_BASE_URL)) return;
   try {
     const r = await fetch(source.url());
     if (!r.ok) return;
@@ -52,9 +62,20 @@ async function captureOne(source: Source, buildId: number, log: FastifyBaseLogge
       `INSERT INTO frames (build_id, ts, kind, path) VALUES ($1, $2, $3, $4)`,
       [buildId, ts, source.kind, relPath],
     );
+    failCounts[source.kind] = 0;
   } catch (err) {
     if (isShuttingDown()) return;
-    log.warn({ err, kind: source.kind }, "frame capture failed");
+    tripUpstream(config.INOVA_FIRMWARE_BASE_URL);
+    failCounts[source.kind]++;
+    if (failCounts[source.kind] % FAIL_LOG_EVERY === 1) {
+      // Log only the message, not the err object — Fastify/pino would
+      // serialize the full stack which adds up under sustained outages.
+      const msg = (err as Error)?.message ?? String(err);
+      log.warn(
+        { kind: source.kind, n: failCounts[source.kind], msg },
+        "frame capture failed",
+      );
+    }
   }
 }
 
