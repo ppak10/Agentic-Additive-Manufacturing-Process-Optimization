@@ -292,6 +292,74 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Per-object plotter outlines (id + polygon) for the current layer. JSON.
+  app.get("/api/plotter/objects", httpProxy("/plotter/objects"));
+
+  // Per-object PNG mask. Forwards on-screen RGBA query params verbatim.
+  // Binary response — same circuit-breaker pattern as the JSON httpProxy but
+  // streams bytes through with the upstream content-type.
+  app.get<{ Params: { id: string }; Querystring: { on?: string; off?: string } }>(
+    "/api/plotter/objects/:id/mask.png",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad object id" });
+      const qs = new URLSearchParams();
+      if (req.query.on) qs.set("on", req.query.on);
+      if (req.query.off) qs.set("off", req.query.off);
+      const url = `${config.INOVA_API_BASE_URL}/plotter/objects/${id}/mask.png${qs.size ? `?${qs}` : ""}`;
+      try {
+        const r = await fetch(url);
+        if (r.status === 404) return reply.code(404).send({ error: "object not found in current layer" });
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        const mime = r.headers.get("content-type") ?? "image/png";
+        return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
+  // Live nesting state (mesh names, bounds, transforms). Works pre/post-print.
+  app.get("/api/job/current/parts", httpProxy("/job/current/parts"));
+
+  // Per-printing-object state (id, name, hash, transform, isExcluded). Only
+  // populated during an active print; returns {data: {objects: []}} otherwise.
+  app.get("/api/printing/objects", httpProxy("/printing/objects"));
+
+  // Mid-print include/exclude toggle. POST body forwarded as JSON. Same
+  // circuit-breaker key as the GETs since both share the plugin host.
+  app.post<{ Params: { id: string }; Body: { excluded?: boolean } }>(
+    "/api/printing/objects/:id/exclude",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad object id" });
+      if (typeof req.body?.excluded !== "boolean") {
+        return reply.code(400).send({ error: "body.excluded (boolean) required" });
+      }
+      try {
+        const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/objects/${id}/exclude`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ excluded: req.body.excluded }),
+        });
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        return await r.json();
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
   // Post-build / Postgres-backed command backfill. Serves the recorded log
   // for a specific build+layer; used for replay and frame-to-command
   // correlation analysis. Limit capped to keep response sizes bounded.
