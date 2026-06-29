@@ -8,6 +8,8 @@ import { usePrintingObjects, excludePrintingObject, type PrintingObject } from "
 import { usePlotterVersion } from "@/hooks/usePlotterVersion";
 import { usePlotterObjects, type PlotterObjectsState } from "@/hooks/usePlotterObjects";
 import { useJob } from "@/hooks/useJob";
+import { useChamber } from "@/hooks/useChamber";
+import { BuildLayout3D } from "@/panels/BuildLayout3D";
 
 // Build Layout: parts list of the currently-printing job + a 2D plot of the
 // active layer with a per-part mask overlay. Mirrors the vanilla SLS4All
@@ -234,6 +236,18 @@ export function BuildLayoutPanel() {
   // print position (it's the plotter's internal layer index, not the job's).
   // Use the job status for the user-facing "layer X / Y" header text.
   const job = useJob(1000);
+  const chamber = useChamber();
+  // Phase-1 placeholder slice thickness (typical SLS). When we have a
+  // /api/print-profile endpoint we'll pull the real value.
+  const LAYER_MM = 0.1;
+  const layerZ = job?.phaseDone != null ? job.phaseDone * LAYER_MM : null;
+  // Shrink the 3D chamber's Z to the actual print height (phaseTotal layers
+  // × thickness) so a short job renders as a flat slab and a tall one as a
+  // tower. Falls back to the full chamber height when phaseTotal is unknown.
+  const effectiveChamber =
+    chamber && job?.phaseTotal != null
+      ? { ...chamber, sizeZ: Math.max(job.phaseTotal * LAYER_MM, 1) }
+      : chamber;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [pending, setPending] = useState<{ obj: PrintingObject; action: "exclude" | "include" } | null>(null);
@@ -297,12 +311,28 @@ export function BuildLayoutPanel() {
           {emptyMessage ? (
             <div className="text-xs opacity-60 py-3">{emptyMessage}</div>
           ) : (
-            // Plot is a fixed-size square; parts list takes the rest. The
-            // plot is a client-side SVG of per-object outlines from
-            // /api/plotter/objects — one <polygon> per object, color/stroke
-            // encoding selection + excluded state, click-to-pick built in.
-            <div className="grid md:grid-cols-[360px_1fr] gap-4">
-              <div className="relative border-2 border-border bg-background overflow-hidden aspect-square w-full max-w-[360px]">
+            // Three columns: 3D view (orbit-controllable mesh of part
+            // bounding boxes + chamber + layer plane), 2D view (per-object
+            // outlines on the current layer), parts list. All three share
+            // the same selectedId/hoveredId state so picking happens
+            // anywhere.
+            // 3-column responsive grid matching CameraPanel's breakpoints,
+            // so the 3D and 2D tiles render at the same width as the chamber
+            // / thermal / galvo camera tiles. On md the parts list spans both
+            // columns under the two tiles; on xl all three sit in one row.
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="relative border-2 border-border bg-background overflow-hidden aspect-square w-full">
+                <BuildLayout3D
+                  chamber={effectiveChamber}
+                  printingObjects={objects}
+                  layerZ={layerZ}
+                  selectedId={selectedId}
+                  hoveredId={hoveredId}
+                  onSelect={setSelectedId}
+                  onHover={setHoveredId}
+                />
+              </div>
+              <div className="relative border-2 border-border bg-background overflow-hidden aspect-square w-full">
                 <BuildLayoutSvg
                   plotterObjects={plotterObjects}
                   selectedId={selectedId}
@@ -311,27 +341,33 @@ export function BuildLayoutPanel() {
                   onHover={setHoveredId}
                 />
               </div>
-              <div className="flex flex-col gap-1 max-h-[60vh] overflow-auto pr-1">
-                {[...groups.entries()].map(([name, group]) => (
-                  <div key={name} className="flex flex-col gap-0.5">
-                    <GroupHeading
-                      name={name}
-                      count={group.length}
-                      excludedCount={group.filter((o) => o.isExcluded).length}
-                    />
-                    {group.map((obj) => (
-                      <ObjectRow
-                        key={obj.id}
-                        obj={obj}
-                        selected={obj.id === selectedId}
-                        hovered={obj.id === hoveredId}
-                        onSelect={() => setSelectedId(obj.id)}
-                        onHover={(h) => setHoveredId(h ? obj.id : null)}
+              {/* Parts list: pinned-bottom action button (always visible),
+                  scrollable list above it. On xl the list cell auto-stretches
+                  to match the square tile height; on md it spans both columns
+                  below the tiles, capped so it can still scroll. */}
+              <div className="md:col-span-2 xl:col-span-1 flex flex-col gap-3 min-h-0 max-h-[480px] xl:max-h-none">
+                <div className="flex-1 min-h-0 overflow-auto pr-1 flex flex-col gap-1">
+                  {[...groups.entries()].map(([name, group]) => (
+                    <div key={name} className="flex flex-col gap-0.5">
+                      <GroupHeading
+                        name={name}
+                        count={group.length}
+                        excludedCount={group.filter((o) => o.isExcluded).length}
                       />
-                    ))}
-                  </div>
-                ))}
-                <div className="mt-auto pt-3">
+                      {group.map((obj) => (
+                        <ObjectRow
+                          key={obj.id}
+                          obj={obj}
+                          selected={obj.id === selectedId}
+                          hovered={obj.id === hoveredId}
+                          onSelect={() => setSelectedId(obj.id)}
+                          onHover={(h) => setHoveredId(h ? obj.id : null)}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <div>
                   {selected ? (
                     <Button
                       variant="default"

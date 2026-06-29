@@ -7,9 +7,9 @@ export function Dashboard() {
   return (
     <>
       <JobPanel />
+      <BuildLayoutPanel />
       <CameraPanel />
       <StatusPanel />
-      <BuildLayoutPanel />
     </>
   );
 }

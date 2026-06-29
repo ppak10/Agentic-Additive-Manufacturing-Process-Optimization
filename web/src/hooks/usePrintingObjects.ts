@@ -9,6 +9,9 @@ export interface PrintingObject {
   name: string;
   hash: string | null;
   transform: number[][]; // 4x4 row-major
+  // Mesh-local AABB. center+size are in mesh-local coords; apply transform
+  // separately. Null if the firmware's PrintingObject lacks a Mesh.
+  bounds: { center: [number, number, number]; size: [number, number, number] } | null;
   isExcluded: boolean;
 }
 
