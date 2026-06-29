@@ -53,7 +53,7 @@ export function JobPanel() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                 <MetricRow label="remaining" value={job?.remaining ?? "—"} />
                 <MetricRow
-                  label="phase"
+                  label="layer"
                   value={
                     job?.phaseDone != null && job?.phaseTotal != null
                       ? `${job.phaseDone} / ${job.phaseTotal}`

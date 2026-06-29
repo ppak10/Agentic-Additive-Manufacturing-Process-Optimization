@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePrintingObjects, excludePrintingObject, type PrintingObject } from "@/hooks/usePrintingObjects";
 import { usePlotterVersion } from "@/hooks/usePlotterVersion";
+import { usePlotterObjects, type PlotterObjectsState } from "@/hooks/usePlotterObjects";
+import { useJob } from "@/hooks/useJob";
 
 // Build Layout: parts list of the currently-printing job + a 2D plot of the
 // active layer with a per-part mask overlay. Mirrors the vanilla SLS4All
@@ -28,17 +30,27 @@ function GroupHeading({ name, count, excludedCount }: { name: string; count: num
 function ObjectRow({
   obj,
   selected,
+  hovered,
   onSelect,
+  onHover,
 }: {
   obj: PrintingObject;
   selected: boolean;
+  hovered: boolean;
   onSelect: () => void;
+  onHover: (hovering: boolean) => void;
 }) {
   return (
     <label
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
       className={cn(
         "flex items-center gap-2 px-2 py-1 rounded-base border-2 cursor-pointer transition-all",
-        selected ? "border-border bg-main/20" : "border-transparent hover:border-border hover:bg-secondary-background",
+        selected
+          ? "border-border bg-main/20"
+          : hovered
+            ? "border-border bg-secondary-background"
+            : "border-transparent hover:border-border hover:bg-secondary-background",
       )}
     >
       <input
@@ -134,11 +146,96 @@ function ConfirmModal({
   );
 }
 
+// Client-side SVG render of the current-layer object outlines. One <polygon>
+// per object from /api/plotter/objects, colored by isExcluded (from
+// /api/printing/objects, joined by id) and highlighted when selected.
+// Coords are plotter raster pixels; the SVG viewBox makes the scaling
+// transparent. vectorEffect="non-scaling-stroke" keeps strokes crisp at
+// any container size.
+function BuildLayoutSvg({
+  plotterObjects,
+  selectedId,
+  hoveredId,
+  onSelect,
+  onHover,
+}: {
+  plotterObjects: PlotterObjectsState | null;
+  selectedId: number | null;
+  hoveredId: number | null;
+  onSelect: (id: number) => void;
+  onHover: (id: number | null) => void;
+}) {
+  const width = plotterObjects?.width ?? 500;
+  const height = plotterObjects?.height ?? 500;
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="xMidYMid meet"
+      className="block w-full h-full"
+    >
+      {plotterObjects?.objects.map((obj) => {
+        const isSelected = obj.id === selectedId;
+        const isHovered = obj.id === hoveredId;
+        // CodePlotterMarkedObject.RelativeOutline is normalized (0..1) over
+        // the plotter raster — scale by width/height to land in the viewBox.
+        const points = obj.outline.map(([x, y]) => `${x * width},${y * height}`).join(" ");
+        return (
+          <polygon
+            key={obj.id}
+            points={points}
+            vectorEffect="non-scaling-stroke"
+            onClick={() => onSelect(obj.id)}
+            onMouseEnter={() => onHover(obj.id)}
+            onMouseLeave={() => onHover(null)}
+            className={cn(
+              "cursor-pointer transition-all fill-main/25 stroke-main/80",
+              // Hover (from list OR plot) brightens the fill — selection
+              // still wins for visual emphasis if both apply. Excluded
+              // parts simply don't appear here (firmware omits them from
+              // /plotter/objects); the list-row badge carries that signal.
+              isHovered && !isSelected && "!fill-main/45 stroke-foreground/70 [stroke-width:2]",
+              isSelected && "!fill-main/60 stroke-foreground [stroke-width:3]",
+            )}
+          />
+        );
+      })}
+      {plotterObjects && plotterObjects.objects.length === 0 && (
+        <text
+          x="50%"
+          y="50%"
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-foreground/40 text-[18px]"
+        >
+          no objects on current layer
+        </text>
+      )}
+      {!plotterObjects && (
+        <text
+          x="50%"
+          y="50%"
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-foreground/40 text-[18px]"
+        >
+          loading…
+        </text>
+      )}
+    </svg>
+  );
+}
+
 export function BuildLayoutPanel() {
   const { objects, unavailable, refresh } = usePrintingObjects(2000);
   const plotter = usePlotterVersion(1000);
+  const plotterObjects = usePlotterObjects(1000);
+  // The plotter's own layerCount/currentLayer is unreliable for the real
+  // print position (it's the plotter's internal layer index, not the job's).
+  // Use the job status for the user-facing "layer X / Y" header text.
+  const job = useJob(1000);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [overlayEnabled, setOverlayEnabled] = useState(true);
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [pending, setPending] = useState<{ obj: PrintingObject; action: "exclude" | "include" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingError, setPendingError] = useState<string | null>(null);
@@ -179,9 +276,9 @@ export function BuildLayoutPanel() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <span>Build layout</span>
-            {plotter && objects && objects.length > 0 && (
+            {job?.phaseDone != null && job?.phaseTotal != null && objects && objects.length > 0 && (
               <span className="opacity-60 font-base text-[11px]">
-                · layer {plotter.currentLayer} / {plotter.layerCount}
+                · layer {job.phaseDone} / {job.phaseTotal}
               </span>
             )}
             {objects && objects.length > 0 && (
@@ -189,45 +286,30 @@ export function BuildLayoutPanel() {
                 {totalCount} objects{excludedCount > 0 && ` · ${excludedCount} excluded`}
               </Badge>
             )}
-            <div className="ml-auto flex items-center gap-2 text-[10px]">
-              <label className="flex items-center gap-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={overlayEnabled}
-                  onChange={(e) => setOverlayEnabled(e.target.checked)}
-                  className="size-3"
-                />
-                <span className="opacity-70">layer overlay</span>
-              </label>
-            </div>
+            {plotterObjects && (
+              <div className="ml-auto text-[10px] opacity-60">
+                {plotterObjects.objects.length} object{plotterObjects.objects.length === 1 ? "" : "s"} on layer
+              </div>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {emptyMessage ? (
             <div className="text-xs opacity-60 py-3">{emptyMessage}</div>
           ) : (
-            <div className="grid md:grid-cols-[1fr_280px] gap-4">
-              <div className="relative border-2 border-border bg-background overflow-hidden">
-                {/* Base layer slice from the firmware's plotted-image endpoint
-                    (already proxied via /api/camera/galvo.png). Cache-busted
-                    by plotter version so refetches happen only on real change. */}
-                <img
-                  src={`/api/camera/galvo.png?v=${plotter?.version ?? 0}`}
-                  alt="layer slice"
-                  className="block w-full object-contain"
+            // Plot is a fixed-size square; parts list takes the rest. The
+            // plot is a client-side SVG of per-object outlines from
+            // /api/plotter/objects — one <polygon> per object, color/stroke
+            // encoding selection + excluded state, click-to-pick built in.
+            <div className="grid md:grid-cols-[360px_1fr] gap-4">
+              <div className="relative border-2 border-border bg-background overflow-hidden aspect-square w-full max-w-[360px]">
+                <BuildLayoutSvg
+                  plotterObjects={plotterObjects}
+                  selectedId={selectedId}
+                  hoveredId={hoveredId}
+                  onSelect={setSelectedId}
+                  onHover={setHoveredId}
                 />
-                {overlayEnabled && selected && plotter && (
-                  <img
-                    src={`/api/plotter/objects/${selected.id}/mask.png?on=ff3030cc&off=00000000&v=${plotter.version}`}
-                    alt={`mask for object ${selected.id}`}
-                    className="absolute inset-0 w-full h-full object-contain pointer-events-none mix-blend-screen"
-                    // 404 happens when the selected object hasn't been emitted
-                    // on the current layer yet — silently hide rather than
-                    // showing a broken-image icon.
-                    onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = "hidden")}
-                    onLoad={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = "visible")}
-                  />
-                )}
               </div>
               <div className="flex flex-col gap-1 max-h-[60vh] overflow-auto pr-1">
                 {[...groups.entries()].map(([name, group]) => (
@@ -242,7 +324,9 @@ export function BuildLayoutPanel() {
                         key={obj.id}
                         obj={obj}
                         selected={obj.id === selectedId}
+                        hovered={obj.id === hoveredId}
                         onSelect={() => setSelectedId(obj.id)}
+                        onHover={(h) => setHoveredId(h ? obj.id : null)}
                       />
                     ))}
                   </div>
