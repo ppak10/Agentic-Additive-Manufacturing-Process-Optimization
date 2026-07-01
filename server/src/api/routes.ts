@@ -331,6 +331,39 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // populated during an active print; returns {data: {objects: []}} otherwise.
   app.get("/api/printing/objects", httpProxy("/printing/objects"));
 
+  // Runtime recoater-passes override — how many recoater passes per layer.
+  // GET returns current values from both DI handles + the plugin's cache;
+  // POST { value: 1..5 | null } sets or clears the override. Takes effect on
+  // the NEXT LayerClient.BeginLayer, which fires at the start of each print
+  // layer, so the change is visible on the following layer.
+  app.get("/api/printing/recoater-passes", httpProxy("/printing/recoater-passes"));
+  app.post<{ Body: { value?: number | null } }>(
+    "/api/printing/recoater-passes",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      // Explicitly forward "value: null" for the clear case — undefined would
+      // omit the field entirely and the plugin's record binding would treat
+      // it as null anyway, but being explicit is cheaper to reason about.
+      const value = req.body?.value === undefined ? null : req.body.value;
+      try {
+        const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/recoater-passes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ value }),
+        });
+        if (r.status === 400) return reply.code(400).send(await r.json());
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        return await r.json();
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
   // Mid-print include/exclude toggle. POST body forwarded as JSON. Same
   // circuit-breaker key as the GETs since both share the plugin host.
   app.post<{ Params: { id: string }; Body: { excluded?: boolean } }>(
