@@ -80,3 +80,19 @@ CREATE INDEX IF NOT EXISTS plotter_commands_build_layer_idx
   ON plotter_commands (build_id, layer_idx, cmd_idx);
 CREATE INDEX IF NOT EXISTS plotter_commands_build_ts_idx
   ON plotter_commands (build_id, ts DESC);
+
+-- Health of the recording pipeline, as classified by /api/health/recording.
+-- One row inserted on every state transition (RECORDING → PRINTING_NOT_RECORDING,
+-- etc.). Lets us reconstruct outages after the fact without correlating gaps in
+-- telemetry/frames — the reason someone printed while the recorder was down is
+-- exactly the case this table exists to answer.
+CREATE TABLE IF NOT EXISTS recording_health_events (
+  id          BIGSERIAL PRIMARY KEY,
+  ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  prev_state  TEXT,
+  new_state   TEXT NOT NULL,
+  reason      TEXT,
+  detail      JSONB
+);
+CREATE INDEX IF NOT EXISTS recording_health_events_ts_idx
+  ON recording_health_events (ts DESC);

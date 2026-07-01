@@ -12,6 +12,8 @@ import { getLatestPrintingStatus } from "../recorder/job.js";
 import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
 import { addPlotterSubscriber, removePlotterSubscriber } from "../recorder/plotterStream.js";
 import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
+import { currentMemorySample } from "../recorder/memory.js";
+import { registerHealthRoutes } from "./health.js";
 
 async function dirSizeBytes(dir: string): Promise<number> {
   let total = 0;
@@ -42,6 +44,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/state/current", async () => getLatestSnapshot());
   app.get("/api/job/current", async () => getLatestPrintingStatus());
+  // Recorder process memory. Cheap; safe to poll. Used to diagnose the
+  // slow heap leak — poll periodically and correlate growth with load.
+  app.get("/api/memory", async () => currentMemorySample());
+
+  // Independent-verification health check; drives the "RECORDING / NOT
+  // RECORDING" banner in the UI. Does not use getLatestSnapshot() — that would
+  // defeat the point of an independent check.
+  registerHealthRoutes(app);
 
   app.get("/api/info", async (_req, reply) => {
     if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {

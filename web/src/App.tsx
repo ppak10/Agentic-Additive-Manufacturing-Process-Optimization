@@ -7,6 +7,7 @@ import { Dashboard } from "@/pages/Dashboard";
 import { Database } from "@/pages/Database";
 import { Replay } from "@/pages/Replay";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
+import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 
 const NAV = [
   { to: "/", label: "Dashboard", end: true },
@@ -56,6 +57,7 @@ export function App() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-3">
+            <RecordingStatusBanner />
             {info && (
               <span className="text-[10px] opacity-50 hidden md:inline">
                 plugin v{info.version} · up {formatUptime(info.uptimeSeconds)}

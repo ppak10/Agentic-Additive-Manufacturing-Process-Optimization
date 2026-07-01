@@ -31,7 +31,7 @@ const SOURCES: Source[] = [
   },
   {
     kind: "galvo",
-    get hz() { return config.CAMERA_HZ; },
+    get hz() { return config.GALVO_HZ; },
     url: () => `${config.INOVA_FIRMWARE_BASE_URL}/api/plottedimage/${randomUUID()}`,
     ext: "png",
   },
@@ -82,12 +82,26 @@ async function captureOne(source: Source, buildId: number, log: FastifyBaseLogge
 export function startCameraRecorder(log: FastifyBaseLogger): void {
   for (const source of SOURCES) {
     void (async () => {
+      // Target-time scheduling: the next capture is anchored to `nextAt`, not
+      // to `previousFinish + period`. Prevents drift when fetch latency is a
+      // large fraction of the period (which happens at higher target rates —
+      // the pre-fix "sleep after work" gave ~4 Hz when configured for 5 Hz,
+      // and would have gotten worse as we bumped rates).
+      let nextAt = Date.now();
       while (true) {
         const buildId = currentBuildId();
         if (buildId !== null) {
           await captureOne(source, buildId, log);
         }
-        await new Promise((r) => setTimeout(r, 1000 / source.hz));
+        const period = 1000 / source.hz;
+        nextAt += period;
+        const now = Date.now();
+        // If we fell behind by more than one whole period (slow fetch, GC pause,
+        // paused build, etc.), re-anchor to now instead of firing back-to-back
+        // "catch-up" captures.
+        if (nextAt < now - period) nextAt = now;
+        const wait = Math.max(0, nextAt - now);
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       }
     })();
   }

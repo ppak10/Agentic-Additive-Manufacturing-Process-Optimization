@@ -8,6 +8,7 @@ import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
 import { startPositionStreamRecorder } from "./recorder/positionStream.js";
 import { startPlotterStreamRecorder } from "./recorder/plotterStream.js";
 import { markShuttingDown } from "./recorder/state.js";
+import { startMemoryMonitor, MEMORY_GUARD_EXIT_CODE } from "./recorder/memory.js";
 import { registerRoutes } from "./api/routes.js";
 
 const fastify = Fastify({ logger: true });
@@ -21,6 +22,11 @@ const start = async () => {
   startBedMatrixRecorder(fastify.log);
   startPositionStreamRecorder(fastify.log);
   startPlotterStreamRecorder(fastify.log);
+  // Cleanly bail out when the heap crosses the soft threshold so an
+  // external supervisor (scripts/run-recorder.sh) can restart with a fresh
+  // heap. Distinct exit code so the supervisor can log "memory restart" vs
+  // "clean shutdown" separately.
+  startMemoryMonitor(fastify.log, () => shutdown("memory-guard"));
   await fastify.listen({ port: config.SERVER_PORT, host: "0.0.0.0" });
 };
 
@@ -37,7 +43,10 @@ const shutdown = async (signal: string) => {
     await new Promise((r) => setTimeout(r, 150));
     await pool.end();
   } finally {
-    process.exit(0);
+    // Non-zero exit when the memory guard triggered so the supervisor
+    // script restarts us; zero exit for user-initiated signals so the
+    // supervisor stops.
+    process.exit(signal === "memory-guard" ? MEMORY_GUARD_EXIT_CODE : 0);
   }
 };
 process.on("SIGTERM", () => void shutdown("SIGTERM"));

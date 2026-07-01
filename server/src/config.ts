@@ -11,8 +11,12 @@ const schema = z.object({
   INOVA_FIRMWARE_BASE_URL: z.string().url().default("http://192.168.1.146"),
   SERVER_PORT: z.coerce.number().int().positive().default(3000),
   TELEMETRY_HZ: z.coerce.number().positive().default(10),
-  CAMERA_HZ: z.coerce.number().positive().default(5),
-  THERMAL_HZ: z.coerce.number().positive().default(2),
+  CAMERA_HZ: z.coerce.number().positive().default(15),
+  // Galvo camera rate. Split from CAMERA_HZ so the chamber and galvo can be
+  // tuned independently — their content, frame sizes, and typical usefulness
+  // to downstream ML differ enough that one knob was a mistake.
+  GALVO_HZ: z.coerce.number().positive().default(10),
+  THERMAL_HZ: z.coerce.number().positive().default(5),
   FRAMES_DIR: z.string().default("./data/frames"),
 });
 
