@@ -4,6 +4,7 @@ import { OrbitControls, Edges, Text, Billboard } from "@react-three/drei";
 import * as THREE from "three";
 import type { PrintingObject } from "@/hooks/usePrintingObjects";
 import type { ChamberSize } from "@/hooks/useChamber";
+import { useMesh } from "@/hooks/useMesh";
 
 // 3D phase-1 view: one box per PrintingObject, sized by mesh-local bounds,
 // placed by the per-instance 4x4 transform. Chamber drawn as a wireframe.
@@ -43,7 +44,14 @@ function buildInstanceMatrix(
   return { matrix: wM.multiply(localT), size: boundsSize };
 }
 
-function ObjectBox({
+// World-placement matrix for a printing object (transposed API row-major →
+// column-major, no local translation — the mesh's own vertices already sit
+// in its local coordinate system).
+function buildWorldMatrix(transform: number[][]): THREE.Matrix4 {
+  return rowMajorToMatrix4(transform).transpose();
+}
+
+function ObjectMesh({
   obj,
   isSelected,
   isHovered,
@@ -56,35 +64,45 @@ function ObjectBox({
   onSelect: () => void;
   onHover: (hovering: boolean) => void;
 }) {
-  // If bounds are missing we can't size the box — render nothing for that
-  // object (still in the list, just not 3D).
-  if (!obj.bounds) return null;
-  const { matrix, size } = useMemo(
-    () => buildInstanceMatrix(obj.transform, obj.bounds!.center, obj.bounds!.size),
-    [obj.transform, obj.bounds],
-  );
+  // Fetch the STL geometry for this hash. Returns null while loading;
+  // during that window we fall back to the bounding box so there's still
+  // something to click.
+  const geometry = useMesh(obj.hash);
+  const worldMatrix = useMemo(() => buildWorldMatrix(obj.transform), [obj.transform]);
 
   const color = obj.isExcluded ? "#666666" : isSelected ? "#ffffff" : isHovered ? "#ffb070" : "#ff7a05";
-  const opacity = obj.isExcluded ? 0.15 : isSelected ? 0.75 : isHovered ? 0.6 : 0.45;
+  const opacity = obj.isExcluded ? 0.35 : isSelected ? 0.9 : isHovered ? 0.8 : 0.7;
   const edgeColor = obj.isExcluded ? "#444" : isSelected ? "#fff" : "#000";
 
+  const handlers = {
+    onPointerOver: (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      onHover(true);
+    },
+    onPointerOut: () => onHover(false),
+    onClick: (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      onSelect();
+    },
+  };
+
+  if (geometry) {
+    return (
+      <mesh geometry={geometry} matrix={worldMatrix} matrixAutoUpdate={false} {...handlers}>
+        <meshStandardMaterial color={color} transparent opacity={opacity} />
+        {isSelected && <Edges color={edgeColor} />}
+      </mesh>
+    );
+  }
+
+  // Loading fallback: bounding box (same code path as phase 1). Skips
+  // entirely if bounds haven't arrived yet either.
+  if (!obj.bounds) return null;
+  const { matrix, size } = buildInstanceMatrix(obj.transform, obj.bounds.center, obj.bounds.size);
   return (
-    <mesh
-      matrix={matrix}
-      matrixAutoUpdate={false}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        onHover(true);
-      }}
-      onPointerOut={() => onHover(false)}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
-    >
+    <mesh matrix={matrix} matrixAutoUpdate={false} {...handlers}>
       <boxGeometry args={size} />
-      <meshStandardMaterial color={color} transparent opacity={opacity} />
-      <Edges color={edgeColor} />
+      <meshStandardMaterial color={color} transparent opacity={0.3} wireframe />
     </mesh>
   );
 }
@@ -225,7 +243,7 @@ export function BuildLayout3D({
         {chamber && <Chamber size={chamber} />}
         {chamber && layerZ != null && <LayerPlane z={layerZ} chamber={chamber} />}
         {(printingObjects ?? []).map((obj) => (
-          <ObjectBox
+          <ObjectMesh
             key={obj.id}
             obj={obj}
             isSelected={obj.id === selectedId}

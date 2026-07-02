@@ -1,6 +1,15 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { MetricRow } from "@/components/ui/metric-row";
 import { useJob } from "@/hooks/useJob";
+import { formatDuration } from "@/lib/utils";
+
+// Split PascalCase (with digits) into a spaced form so the phase badge reads
+// naturally ("HeatingBedPreparation" → "Heating Bed Preparation", "Heating3"
+// → "Heating 3"). Kept in this file since JobPanel is the only consumer.
+function prettifyPhase(phase: string): string {
+  return phase.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Za-z])(\d)/g, "$1 $2");
+}
 
 function ProgressBar({ percent }: { percent: number }) {
   const clamped = Math.max(0, Math.min(100, percent));
@@ -17,33 +26,23 @@ function ProgressBar({ percent }: { percent: number }) {
   );
 }
 
-function MetricRow({ label, value, unit }: { label: string; value: string | number; unit?: string }) {
-  return (
-    <div className="flex justify-between text-xs">
-      <span className="opacity-70">{label}</span>
-      <span className="font-heading">
-        {value}
-        {unit ? <span className="opacity-60 ml-1">{unit}</span> : null}
-      </span>
-    </div>
-  );
-}
-
 export function JobPanel() {
   const job = useJob(1000);
-  const isActive = job?.phase !== null || job?.jobName !== null;
+  // isActive: a real print is in progress if phase is set to anything other
+  // than NotSet. (Previously we OR'd against jobName, which stayed populated
+  // between prints, so the badge never fell back to "idle".)
+  const phaseIsActive = job?.phase != null && job.phase !== "NotSet";
+  const isActive = phaseIsActive || (job?.jobName != null && job.jobName !== "");
 
   return (
-    <div className="px-4 pt-4 grid gap-4">
-      <Card>
+    <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
             <span>Job</span>
-            <Badge variant={isActive ? "default" : "neutral"}>
-              {isActive ? "running" : "idle"}
+            <Badge variant={phaseIsActive ? "default" : "neutral"}>
+              {phaseIsActive ? prettifyPhase(job!.phase!) : "idle"}
             </Badge>
             {job?.jobName && <span className="opacity-70 font-base">· {job.jobName}</span>}
-            {job?.phase && <span className="opacity-70 font-base">· {job.phase}</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -51,7 +50,7 @@ export function JobPanel() {
             <>
               <ProgressBar percent={job?.progress ?? 0} />
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                <MetricRow label="remaining" value={job?.remaining ?? "—"} />
+                <MetricRow label="remaining" value={formatDuration(job?.remaining)} />
                 <MetricRow
                   label="layer"
                   value={
@@ -67,22 +66,11 @@ export function JobPanel() {
                 />
                 <MetricRow label="profile" value={job?.printProfileName ?? "—"} />
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs opacity-70">
-                <MetricRow label="cpu" value={job?.cpuTemp.toFixed(0) ?? "—"} unit="°C" />
-                <MetricRow label="gpu" value={job?.gpuTemp.toFixed(0) ?? "—"} unit="°C" />
-                <MetricRow label="cpu load" value={(job?.totalCpuLoad ?? 0).toFixed(1)} unit="%" />
-                <MetricRow
-                  label="mem"
-                  value={`${job?.selfUsedMemory ?? 0} / ${job?.totalAvailableMemory ?? 0}`}
-                  unit="MB"
-                />
-              </div>
             </>
           ) : (
             <div className="text-xs opacity-60">No active job — printer idle.</div>
           )}
         </CardContent>
       </Card>
-    </div>
   );
 }

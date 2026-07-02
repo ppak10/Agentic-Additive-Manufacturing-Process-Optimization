@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Scissors, RotateCcw, AlertTriangle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +9,6 @@ import { usePlotterVersion } from "@/hooks/usePlotterVersion";
 import { usePlotterObjects, type PlotterObjectsState } from "@/hooks/usePlotterObjects";
 import { useJob } from "@/hooks/useJob";
 import { useChamber } from "@/hooks/useChamber";
-import { useRecoaterPasses } from "@/hooks/useRecoaterPasses";
 import { BuildLayout3D } from "@/panels/BuildLayout3D";
 
 // Build Layout: parts list of the currently-printing job + a 2D plot of the
@@ -229,38 +228,6 @@ function BuildLayoutSvg({
   );
 }
 
-// Compact stepper for the runtime recoater-passes override. `auto` = null
-// (defer to the print profile). Value applies from the NEXT layer onward.
-// Range gated at 1..5 (matches the plugin-side validation).
-function RecoaterPassesControl() {
-  const { value, setValue, busy, error } = useRecoaterPasses();
-  const current = value;
-  const displayVal = current === null ? "auto" : String(current);
-  const canDecrement = current !== null; // includes "step down to auto"
-  const canIncrement = current === null || current < 5;
-  const btnClass =
-    "px-1.5 py-0.5 border-2 border-border rounded-base bg-secondary-background text-foreground shadow-shadow hover:translate-x-boxShadowX hover:translate-y-boxShadowY hover:shadow-none transition-all disabled:opacity-30 disabled:pointer-events-none text-[11px] font-heading";
-
-  const onDec = () => {
-    if (current === null) return;
-    // Step down; falling below 1 clears the override (back to auto).
-    void setValue(current > 1 ? current - 1 : null).catch(() => {});
-  };
-  const onInc = () => {
-    void setValue((current ?? 1) + 1).catch(() => {});
-  };
-
-  return (
-    <div className="flex items-center gap-1 text-[10px]" title={error ?? "Recoater passes per layer (takes effect on next layer)"}>
-      <span className="opacity-60">recoat:</span>
-      <button className={btnClass} disabled={busy || !canDecrement} onClick={onDec} aria-label="fewer recoater passes">−</button>
-      <span className="min-w-[3ch] text-center font-heading">{displayVal}</span>
-      <button className={btnClass} disabled={busy || !canIncrement} onClick={onInc} aria-label="more recoater passes">+</button>
-      {error && <span className="text-red-600 dark:text-red-400 ml-1" title={error}>!</span>}
-    </div>
-  );
-}
-
 export function BuildLayoutPanel() {
   const { objects, unavailable, refresh } = usePrintingObjects(2000);
   const plotter = usePlotterVersion(1000);
@@ -273,13 +240,25 @@ export function BuildLayoutPanel() {
   // Phase-1 placeholder slice thickness (typical SLS). When we have a
   // /api/print-profile endpoint we'll pull the real value.
   const LAYER_MM = 0.1;
-  const layerZ = job?.phaseDone != null ? job.phaseDone * LAYER_MM : null;
-  // Shrink the 3D chamber's Z to the actual print height (phaseTotal layers
-  // × thickness) so a short job renders as a flat slab and a tall one as a
-  // tower. Falls back to the full chamber height when phaseTotal is unknown.
+  // phaseDone/phaseTotal are per-phase counters — during Heating, PrintCap,
+  // Cooling, etc. they reflect that phase's progress (e.g. heating steps),
+  // NOT the layer count. Cache the last-seen values when phase === "Layers"
+  // so the 3D chamber height and layer-plane position stay meaningful
+  // through phase transitions (Heating → Layers → Cooling).
+  const [rememberedLayers, setRememberedLayers] = useState<{ done: number; total: number } | null>(null);
+  useEffect(() => {
+    if (job?.phase === "Layers" && job.phaseDone != null && job.phaseTotal != null) {
+      setRememberedLayers({ done: job.phaseDone, total: job.phaseTotal });
+    }
+  }, [job?.phase, job?.phaseDone, job?.phaseTotal]);
+  const layerZ = rememberedLayers ? rememberedLayers.done * LAYER_MM : null;
+  // Shrink the 3D chamber's Z to the actual print stack (layers × thickness).
+  // Falls back to the full chamber height when we haven't observed the
+  // Layers phase yet (e.g. still heating on first boot of the dashboard).
+  const printHeightMM = rememberedLayers ? rememberedLayers.total * LAYER_MM : null;
   const effectiveChamber =
-    chamber && job?.phaseTotal != null
-      ? { ...chamber, sizeZ: Math.max(job.phaseTotal * LAYER_MM, 1) }
+    chamber && printHeightMM != null
+      ? { ...chamber, sizeZ: Math.max(printHeightMM, 1) }
       : chamber;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
@@ -318,14 +297,15 @@ export function BuildLayoutPanel() {
         : null;
 
   return (
-    <div className="p-4">
+    <>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <span>Build layout</span>
-            {job?.phaseDone != null && job?.phaseTotal != null && objects && objects.length > 0 && (
+            {rememberedLayers && objects && objects.length > 0 && (
               <span className="opacity-60 font-base text-[11px]">
-                · layer {job.phaseDone} / {job.phaseTotal}
+                · layer {rememberedLayers.done} / {rememberedLayers.total}
+                {job?.phase && job.phase !== "Layers" && <span className="ml-1 opacity-70">({job.phase.toLowerCase()})</span>}
               </span>
             )}
             {objects && objects.length > 0 && (
@@ -333,14 +313,11 @@ export function BuildLayoutPanel() {
                 {totalCount} objects{excludedCount > 0 && ` · ${excludedCount} excluded`}
               </Badge>
             )}
-            <div className="ml-auto flex items-center gap-3">
-              {plotterObjects && (
-                <div className="text-[10px] opacity-60">
-                  {plotterObjects.objects.length} object{plotterObjects.objects.length === 1 ? "" : "s"} on layer
-                </div>
-              )}
-              <RecoaterPassesControl />
-            </div>
+            {plotterObjects && (
+              <div className="ml-auto text-[10px] opacity-60">
+                {plotterObjects.objects.length} object{plotterObjects.objects.length === 1 ? "" : "s"} on layer
+              </div>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -449,6 +426,6 @@ export function BuildLayoutPanel() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }

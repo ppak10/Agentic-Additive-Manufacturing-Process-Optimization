@@ -3,10 +3,12 @@ import fastifyWebsocket from "@fastify/websocket";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, stat, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
+import { spoolFilePath } from "../recorder/spool.js";
+import type { FrameSpoolLine } from "../recorder/camera.js";
 import { getLatestSnapshot } from "../recorder/telemetry.js";
 import { getLatestPrintingStatus } from "../recorder/job.js";
 import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
@@ -189,9 +191,70 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (rows.length === 0) return reply.code(404).send({ error: "not found" });
     const row = rows[0]!;
     const ext = row.path.split(".").pop() ?? "bin";
-    const mime = ext === "jpg" ? "image/jpeg" : ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "application/octet-stream";
+    const mime =
+      ext === "jpg" ? "image/jpeg" : ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "json" ? "application/json" : "application/octet-stream";
     return reply.type(mime).send(createReadStream(resolve(config.FRAMES_DIR, row.path)));
   });
+
+  // Live playback of the IN-PROGRESS build. Its frame DB rows don't exist yet
+  // (the importer writes them post-print), but the image bytes are already on
+  // disk and their metadata is in the NVMe spool. We read framesByKind straight
+  // from SPOOL_DIR/<id>/frames.ndjson. Once the build ends and the importer
+  // renames the spool file to `.imported`, this returns empty frames and the
+  // DB-backed /manifest takes over — a clean handoff, no overlap.
+  app.get<{ Params: { id: string } }>("/api/builds/:id/spool-manifest", async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return reply.code(400).send({ error: "bad id" });
+    const buildRes = await pool.query(
+      `SELECT id, job_name, phase, started_at, ended_at FROM builds WHERE id = $1`,
+      [id],
+    );
+    if (buildRes.rows.length === 0) return reply.code(404).send({ error: "not found" });
+
+    const framesByKind: Record<string, { tsMs: number; path: string }[]> = {};
+    try {
+      const content = await readFile(spoolFilePath(id, "frames"), "utf8");
+      for (const line of content.split("\n")) {
+        if (!line) continue;
+        let f: FrameSpoolLine;
+        try {
+          f = JSON.parse(line) as FrameSpoolLine;
+        } catch {
+          continue; // tolerate a torn final line mid-append
+        }
+        (framesByKind[f.kind] ??= []).push({ tsMs: new Date(f.respondedAt).getTime(), path: f.path });
+      }
+    } catch {
+      // No spool file (build not recording, or already imported) → empty frames.
+    }
+    for (const k of Object.keys(framesByKind)) framesByKind[k]!.sort((a, b) => a.tsMs - b.tsMs);
+
+    return { build: buildRes.rows[0], framesByKind };
+  });
+
+  // Serve a spooled frame image by its relative path (as recorded in the frames
+  // spool). Confined to FRAMES_DIR/<id>/ to prevent path traversal.
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    "/api/frames/spool/:id",
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const rel = req.query.path ?? "";
+      const buildRoot = resolve(config.FRAMES_DIR, String(id));
+      const abs = resolve(config.FRAMES_DIR, rel);
+      if (abs !== buildRoot && !abs.startsWith(buildRoot + "/")) {
+        return reply.code(400).send({ error: "bad path" });
+      }
+      try {
+        await stat(abs);
+      } catch {
+        return reply.code(404).send({ error: "not found" });
+      }
+      const ext = abs.split(".").pop() ?? "bin";
+      const mime =
+        ext === "jpg" ? "image/jpeg" : ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "json" ? "application/json" : "application/octet-stream";
+      return reply.type(mime).send(createReadStream(abs));
+    },
+  );
 
   // Camera proxy with circuit breaker on the firmware host. During an outage
   // the browser keeps polling at ~24fps × 3 image kinds; without the breaker
@@ -337,6 +400,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Live nesting state (mesh names, bounds, transforms). Works pre/post-print.
   app.get("/api/job/current/parts", httpProxy("/job/current/parts"));
 
+  // Binary mesh blob (raw bytes) keyed by mesh hash. Byte-passthrough — no
+  // JSON envelope, no decoding — so the browser can hand the ArrayBuffer
+  // straight to Three.js BufferGeometry.
+  app.get<{ Params: { hash: string } }>("/api/printing/meshes/:hash", async (req, reply) => {
+    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
+    try {
+      const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/meshes/${encodeURIComponent(req.params.hash)}`);
+      if (r.status === 404) return reply.code(404).send({ error: "mesh not found (hash unknown or not mid-print)" });
+      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+      const mime = r.headers.get("content-type") ?? "application/octet-stream";
+      return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
+    } catch (err) {
+      tripUpstream(config.INOVA_API_BASE_URL);
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+    }
+  });
+
   // Per-printing-object state (id, name, hash, transform, isExcluded). Only
   // populated during an active print; returns {data: {objects: []}} otherwise.
   app.get("/api/printing/objects", httpProxy("/printing/objects"));
@@ -363,6 +446,42 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ value }),
         });
+        if (r.status === 400) return reply.code(400).send(await r.json());
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        return await r.json();
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
+  // Full-recoat passes override — expands each layer into N complete recoats
+  // at 1/N layer thickness (plugin's FullRecoatLayerClient substitution).
+  // Distinct from recoater-passes, which stages powder delivery WITHIN one
+  // recoat sequence. GET also reports replacementActive so the UI can tell
+  // whether the LayerClient substitution is actually loaded on the printer.
+  app.get(
+    "/api/printing/recoater-passes-full",
+    httpProxy("/printing/recoater-passes-full"),
+  );
+  app.post<{ Body: { value?: number | null } }>(
+    "/api/printing/recoater-passes-full",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      const value = req.body?.value === undefined ? null : req.body.value;
+      try {
+        const r = await fetch(
+          `${config.INOVA_API_BASE_URL}/printing/recoater-passes-full`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ value }),
+          },
+        );
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
         return await r.json();

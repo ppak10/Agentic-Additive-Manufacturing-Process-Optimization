@@ -61,8 +61,10 @@ export function RecordingStatusBanner() {
   const Icon = s.Icon;
 
   const detail = health?.reason ?? "no health check yet";
-  const telemetryLag = health?.spool.telemetry.append_lag_ms;
-  const buildId = health?.build.current_build_id;
+  // Optional-chain past `spool`/`build` too: during a deploy the tab can hold
+  // a stale pre-upgrade payload (old `db` shape) against the new code.
+  const telemetryLag = health?.spool?.telemetry?.append_lag_ms;
+  const buildId = health?.build?.current_build_id;
   const importer = health?.importer;
 
   const enableAlerts = async () => {

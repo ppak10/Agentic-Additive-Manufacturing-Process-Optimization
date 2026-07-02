@@ -30,7 +30,7 @@ function CameraTile({ title, src, intervalMs }: { title: string; src: string; in
 
 export function CameraPanel() {
   return (
-    <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
       <CameraTile title="Chamber" src="/api/camera/chamber.jpg" intervalMs={1000 / 24} />
       <ThermalTile />
       <GalvoTile />

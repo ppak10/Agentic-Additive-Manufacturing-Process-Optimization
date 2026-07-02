@@ -118,7 +118,7 @@ export function StatusPanel() {
   const { snapshot, connected } = useStream();
 
   return (
-    <div className="p-4 grid gap-4">
+    <div className="grid gap-4">
       <div className="flex items-center gap-3">
         <Badge variant={connected ? "default" : "neutral"}>
           {connected ? "live" : "disconnected"}

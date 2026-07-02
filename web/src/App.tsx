@@ -4,6 +4,7 @@ import { Moon, Sun, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Dashboard } from "@/pages/Dashboard";
+import { Recording } from "@/pages/Recording";
 import { Database } from "@/pages/Database";
 import { Replay } from "@/pages/Replay";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
@@ -11,6 +12,7 @@ import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 
 const NAV = [
   { to: "/", label: "Dashboard", end: true },
+  { to: "/recording", label: "Recording", end: false },
   { to: "/database", label: "Database", end: false },
 ] as const;
 
@@ -71,6 +73,7 @@ export function App() {
         <main className="flex-1 overflow-auto">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/recording" element={<Recording />} />
             <Route path="/database" element={<Database />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
             <Route path="*" element={<Navigate to="/" replace />} />

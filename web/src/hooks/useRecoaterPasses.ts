@@ -8,9 +8,12 @@ import { useCallback, useEffect, useState } from "react";
 // The plugin's response includes BOTH IOptions.Value and IOptionsMonitor
 // snapshots (they resolve to distinct instances in this firmware). The hook
 // collapses them to the first non-null — they should always agree because
-// the plugin writes them in lock-step.
+// the plugin writes them in lock-step. `profileDefault` is what LayerClient
+// falls back to when no override is set (from IPrintingService.RunningSetup);
+// null when no print is running.
 export interface RecoaterPassesState {
   value: number | null;
+  profileDefault: number | null;
   savedState: number | null;
   refresh: () => void;
   setValue: (n: number | null) => Promise<void>;
@@ -19,11 +22,17 @@ export interface RecoaterPassesState {
 }
 
 interface Envelope {
-  data?: { iOptions: number | null; iOptionsMonitor: number | null; savedState: number | null };
+  data?: {
+    iOptions: number | null;
+    iOptionsMonitor: number | null;
+    savedState: number | null;
+    profileDefault: number | null;
+  };
 }
 
 export function useRecoaterPasses(intervalMs = 5000): RecoaterPassesState {
   const [value, setValueState] = useState<number | null>(null);
+  const [profileDefault, setProfileDefault] = useState<number | null>(null);
   const [savedState, setSavedState] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +47,7 @@ export function useRecoaterPasses(intervalMs = 5000): RecoaterPassesState {
         const env = (await r.json()) as Envelope;
         if (cancelled || !env.data) return;
         setValueState(env.data.iOptions ?? env.data.iOptionsMonitor ?? null);
+        setProfileDefault(env.data.profileDefault ?? null);
         setSavedState(env.data.savedState);
       } catch {
         /* swallow */
@@ -69,6 +79,7 @@ export function useRecoaterPasses(intervalMs = 5000): RecoaterPassesState {
       const env = (await r.json()) as Envelope;
       if (env.data) {
         setValueState(env.data.iOptions ?? env.data.iOptionsMonitor ?? null);
+        setProfileDefault(env.data.profileDefault ?? null);
         setSavedState(env.data.savedState);
       }
     } catch (e) {
@@ -79,5 +90,5 @@ export function useRecoaterPasses(intervalMs = 5000): RecoaterPassesState {
     }
   }, []);
 
-  return { value, savedState, refresh, setValue, busy, error };
+  return { value, profileDefault, savedState, refresh, setValue, busy, error };
 }
