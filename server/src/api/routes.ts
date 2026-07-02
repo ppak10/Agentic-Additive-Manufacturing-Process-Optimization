@@ -457,8 +457,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Full-recoat passes override — expands each layer into N complete recoats
-  // at 1/N layer thickness (plugin's FullRecoatLayerClient substitution).
+  // Full-recoat passes override — expands each layer into N full-height
+  // recoats (plugin's FullRecoatLayerClient substitution): one normal recoat
+  // plus N-1 repeat sweeps at the same bed height. `powder` controls whether
+  // repeats feed a fresh full dose (short-feed compensation) or run dry
+  // (debris clearing); omitted = leave the sticky setting unchanged.
   // Distinct from recoater-passes, which stages powder delivery WITHIN one
   // recoat sequence. GET also reports replacementActive so the UI can tell
   // whether the LayerClient substitution is actually loaded on the printer.
@@ -466,22 +469,55 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     "/api/printing/recoater-passes-full",
     httpProxy("/printing/recoater-passes-full"),
   );
-  app.post<{ Body: { value?: number | null } }>(
+  app.post<{ Body: { value?: number | null; powder?: boolean } }>(
     "/api/printing/recoater-passes-full",
     async (req, reply) => {
       if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
         return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
       }
       const value = req.body?.value === undefined ? null : req.body.value;
+      const powder = typeof req.body?.powder === "boolean" ? req.body.powder : undefined;
       try {
         const r = await fetch(
           `${config.INOVA_API_BASE_URL}/printing/recoater-passes-full`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ value }),
+            body: JSON.stringify({ value, powder }),
           },
         );
+        if (r.status === 400) return reply.code(400).send(await r.json());
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        return await r.json();
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
+  // Generic LayerClientOptions runtime overrides (speeds, shake, powder
+  // dosing, Z clearance, delays). GET returns the field list with current
+  // values + saved override state; POST takes a partial {values: {name:
+  // number|null}} map (null clears). Validation happens plugin-side (field
+  // registry with per-field kind/min/max), so 400s pass through.
+  app.get("/api/printing/layer-overrides", httpProxy("/printing/layer-overrides"));
+  app.post<{ Body: { values?: Record<string, number | null> } }>(
+    "/api/printing/layer-overrides",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      if (!req.body?.values || typeof req.body.values !== "object") {
+        return reply.code(400).send({ error: "body.values (object) required" });
+      }
+      try {
+        const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/layer-overrides`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ values: req.body.values }),
+        });
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
         return await r.json();
