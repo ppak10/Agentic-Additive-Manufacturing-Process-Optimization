@@ -3,11 +3,18 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
-import { pool } from "../db/pool.js";
 import { currentBuildId, isShuttingDown } from "./state.js";
 import { isUpstreamOpen, tripUpstream } from "./upstreamBreaker.js";
+import { appendSpool } from "./spool.js";
 
 type Kind = "chamber" | "thermal" | "galvo";
+
+// Shape of one line in the frames spool — consumed by importer.ts.
+export interface FrameSpoolLine {
+  respondedAt: string;
+  kind: string;
+  path: string;
+}
 
 interface Source {
   kind: Kind;
@@ -58,10 +65,10 @@ async function captureOne(source: Source, buildId: number, log: FastifyBaseLogge
     await mkdir(dirname(absPath), { recursive: true });
     await writeFile(absPath, buf);
     if (isShuttingDown()) return;
-    await pool.query(
-      `INSERT INTO frames (build_id, ts, kind, path) VALUES ($1, $2, $3, $4)`,
-      [buildId, ts, source.kind, relPath],
-    );
+    // Metadata goes to the NVMe spool, not the DB — the frames row is
+    // INSERTed by the importer after the build ends.
+    const line: FrameSpoolLine = { respondedAt: ts.toISOString(), kind: source.kind, path: relPath };
+    appendSpool("frames", buildId, JSON.stringify(line));
     failCounts[source.kind] = 0;
   } catch (err) {
     if (isShuttingDown()) return;

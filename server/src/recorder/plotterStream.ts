@@ -1,12 +1,12 @@
 import type { FastifyBaseLogger } from "fastify";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { pool } from "../db/pool.js";
 import { currentBuildId, isShuttingDown } from "./state.js";
+import { appendSpool, noteFrame } from "./spool.js";
 
 // Mirror of the plugin's CommandFrame data envelope (camelCase per its
 // JsonSerializerDefaults.Web options).
-interface CommandFrame {
+export interface CommandFrame {
   respondedAt: string;
   data: {
     buildEpoch: string;
@@ -21,28 +21,6 @@ interface CommandFrame {
     raw: string | null;
   };
 }
-
-type Row = {
-  buildId: number;
-  ts: Date;
-  layerIdx: number;
-  cmdIdx: number;
-  op: string;
-  x: number | null;
-  y: number | null;
-  laser: number | null;
-  speed: number | null;
-  raw: string | null;
-};
-
-// Tighter than position_hf — commands burst higher than the ~1 kHz HF position
-// stream during a dense raster, and a smaller flush window keeps the dashboard
-// backfill query fresh enough for "what happened in the last few seconds".
-const BATCH_SIZE = 1000;
-const BATCH_MS = 250;
-
-let buffer: Row[] = [];
-let flushTimer: NodeJS.Timeout | null = null;
 
 // Last seen buildEpoch — change indicates the plugin restarted mid-print or a
 // new print began. We log a warning but keep writing; benign cmd_idx overlap
@@ -73,38 +51,6 @@ function broadcast(rawFrame: string): void {
       /* one bad subscriber shouldn't break the others */
     }
   }
-}
-
-async function flush(): Promise<void> {
-  if (buffer.length === 0) return;
-  if (isShuttingDown()) return;
-  const rows = buffer;
-  buffer = [];
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  const values: unknown[] = [];
-  const placeholders: string[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i]!;
-    const o = i * 10;
-    placeholders.push(
-      `($${o + 1},$${o + 2},$${o + 3},$${o + 4},$${o + 5},$${o + 6},$${o + 7},$${o + 8},$${o + 9},$${o + 10})`,
-    );
-    values.push(r.buildId, r.ts, r.layerIdx, r.cmdIdx, r.op, r.x, r.y, r.laser, r.speed, r.raw);
-  }
-  await pool.query(
-    `INSERT INTO plotter_commands (build_id, ts, layer_idx, cmd_idx, op, x, y, laser, speed, raw) VALUES ${placeholders.join(",")}`,
-    values,
-  );
-}
-
-function scheduleFlush(log: FastifyBaseLogger): void {
-  if (flushTimer) return;
-  flushTimer = setTimeout(() => {
-    flush().catch((err) => log.error({ err }, "plotter_commands flush failed"));
-  }, BATCH_MS);
 }
 
 export function startPlotterStreamRecorder(log: FastifyBaseLogger): void {
@@ -138,9 +84,10 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
       // keeps drawing even when no build is active (e.g. operator-initiated
       // movement testing).
       broadcast(rawStr);
+      noteFrame("plotter");
 
       const buildId = currentBuildId();
-      if (buildId === null) return; // not in a build; skip DB write
+      if (buildId === null) return; // not in a build; skip spooling
       if (isShuttingDown()) return;
       try {
         const frame = JSON.parse(rawStr) as CommandFrame;
@@ -151,26 +98,12 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
           );
         }
         lastBuildEpoch = frame.data.buildEpoch;
-        buffer.push({
-          buildId,
-          ts: new Date(frame.data.ts),
-          layerIdx: frame.data.layer,
-          cmdIdx: frame.data.idx,
-          op: frame.data.op,
-          x: frame.data.x,
-          y: frame.data.y,
-          laser: frame.data.laser,
-          speed: frame.data.speed,
-          raw: frame.data.raw,
-        });
-        if (buffer.length >= BATCH_SIZE) {
-          flush().catch((err) => log.error({ err }, "plotter_commands flush failed"));
-        } else {
-          scheduleFlush(log);
-        }
-      } catch (err) {
-        log.warn({ err }, "plotter_commands frame parse failed");
+      } catch {
+        /* epoch tracking is best-effort; the importer validates each line */
       }
+      // Raw frame verbatim onto the NVMe spool — imported into
+      // plotter_commands after the build ends.
+      appendSpool("plotter", buildId, rawStr);
     });
   });
 }

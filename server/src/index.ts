@@ -9,6 +9,8 @@ import { startPositionStreamRecorder } from "./recorder/positionStream.js";
 import { startPlotterStreamRecorder } from "./recorder/plotterStream.js";
 import { markShuttingDown } from "./recorder/state.js";
 import { startMemoryMonitor, MEMORY_GUARD_EXIT_CODE } from "./recorder/memory.js";
+import { closeAllSpools } from "./recorder/spool.js";
+import { recoverPendingSpools } from "./recorder/importer.js";
 import { registerRoutes } from "./api/routes.js";
 
 const fastify = Fastify({ logger: true });
@@ -27,6 +29,10 @@ const start = async () => {
   // heap. Distinct exit code so the supervisor can log "memory restart" vs
   // "clean shutdown" separately.
   startMemoryMonitor(fastify.log, () => shutdown("memory-guard"));
+  // Spool recovery is delayed so the job detector's first polls can re-adopt
+  // an in-progress build first — recovering the ACTIVE build's spool would
+  // import it mid-print and orphan everything appended afterwards.
+  setTimeout(() => void recoverPendingSpools(fastify.log), 15_000).unref();
   await fastify.listen({ port: config.SERVER_PORT, host: "0.0.0.0" });
 };
 
@@ -41,6 +47,10 @@ const shutdown = async (signal: string) => {
     // Brief grace period for recorder loops to observe the shutdown flag
     // and bail out of mid-flight DB calls before we yank the pool out.
     await new Promise((r) => setTimeout(r, 150));
+    // Flush buffered spool lines to the NVMe before exiting — an interrupted
+    // import is redone on next start (idempotent), but an unflushed spool
+    // buffer would be data actually lost.
+    await closeAllSpools();
     await pool.end();
   } finally {
     // Non-zero exit when the memory guard triggered so the supervisor

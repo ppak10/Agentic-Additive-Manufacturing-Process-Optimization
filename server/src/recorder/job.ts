@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { setCurrentBuildId, isShuttingDown } from "./state.js";
+import { enqueueImport } from "./importer.js";
 
 interface PrintingStatus {
   phase: string | null;
@@ -155,6 +156,9 @@ export function startJobDetector(log: FastifyBaseLogger): void {
           if (isShuttingDown()) continue;
           await closeBuild(currentId, prevPs, log);
           setCurrentBuildId(null);
+          // Print is over — realtime no longer matters, so drain the NVMe
+          // spool into Postgres now. Queued: never blocks the detector loop.
+          enqueueImport(currentId, log);
           currentId = null;
           prevPs = null;
         } else if (active && currentId !== null && prevPs !== null) {

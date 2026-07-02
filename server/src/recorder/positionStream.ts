@@ -1,10 +1,10 @@
 import type { FastifyBaseLogger } from "fastify";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { pool } from "../db/pool.js";
 import { currentBuildId, isShuttingDown } from "./state.js";
+import { appendSpool, noteFrame } from "./spool.js";
 
-interface PositionFrame {
+export interface PositionFrame {
   respondedAt: string;
   data: {
     x: number;
@@ -15,23 +15,6 @@ interface PositionFrame {
     hasHomed: boolean;
   };
 }
-
-type Row = {
-  buildId: number;
-  ts: Date;
-  x: number;
-  y: number;
-  z1: number;
-  z2: number;
-  r: number;
-  hasHomed: boolean;
-};
-
-const BATCH_SIZE = 500;
-const BATCH_MS = 500;
-
-let buffer: Row[] = [];
-let flushTimer: NodeJS.Timeout | null = null;
 
 // Live subscribers (WS clients on /api/movement/position/stream). The firmware's
 // PositionChangedHighFrequency event only delivers to the first AsyncEvent
@@ -57,36 +40,6 @@ function broadcast(rawFrame: string): void {
       /* one bad subscriber shouldn't break the others */
     }
   }
-}
-
-async function flush(): Promise<void> {
-  if (buffer.length === 0) return;
-  if (isShuttingDown()) return;
-  const rows = buffer;
-  buffer = [];
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  const values: unknown[] = [];
-  const placeholders: string[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i]!;
-    const o = i * 8;
-    placeholders.push(`($${o + 1},$${o + 2},$${o + 3},$${o + 4},$${o + 5},$${o + 6},$${o + 7},$${o + 8})`);
-    values.push(r.buildId, r.ts, r.x, r.y, r.z1, r.z2, r.r, r.hasHomed);
-  }
-  await pool.query(
-    `INSERT INTO position_hf (build_id, ts, x, y, z1, z2, r, has_homed) VALUES ${placeholders.join(",")}`,
-    values,
-  );
-}
-
-function scheduleFlush(log: FastifyBaseLogger): void {
-  if (flushTimer) return;
-  flushTimer = setTimeout(() => {
-    flush().catch((err) => log.error({ err }, "position_hf flush failed"));
-  }, BATCH_MS);
 }
 
 export function startPositionStreamRecorder(log: FastifyBaseLogger): void {
@@ -119,30 +72,15 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
       // Fan out to live WS subscribers regardless of build state so the
       // GalvoPlotTile keeps drawing even when no build is active.
       broadcast(rawStr);
+      noteFrame("position");
 
       const buildId = currentBuildId();
-      if (buildId === null) return; // not in a build; skip DB write
+      if (buildId === null) return; // not in a build; skip spooling
       if (isShuttingDown()) return;
-      try {
-        const frame = JSON.parse(rawStr) as PositionFrame;
-        buffer.push({
-          buildId,
-          ts: new Date(frame.respondedAt),
-          x: frame.data.x,
-          y: frame.data.y,
-          z1: frame.data.z1,
-          z2: frame.data.z2,
-          r: frame.data.r,
-          hasHomed: frame.data.hasHomed,
-        });
-        if (buffer.length >= BATCH_SIZE) {
-          flush().catch((err) => log.error({ err }, "position_hf flush failed"));
-        } else {
-          scheduleFlush(log);
-        }
-      } catch (err) {
-        log.warn({ err }, "position_hf frame parse failed");
-      }
+      // Raw frame verbatim onto the NVMe spool — imported into position_hf
+      // after the build ends. At ~1 kHz this stream is exactly the write
+      // volume the SMR-backed DB couldn't absorb live.
+      appendSpool("position", buildId, rawStr);
     });
   });
 }

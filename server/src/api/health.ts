@@ -1,15 +1,24 @@
 import type { FastifyInstance } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { currentBuildId } from "../recorder/state.js";
-import { isShuttingDown } from "../recorder/state.js";
+import { currentBuildId, isShuttingDown } from "../recorder/state.js";
+import { getSpoolStats, SPOOL_STREAMS, type SpoolStream } from "../recorder/spool.js";
+import { getImporterStatus, type ImporterStatus } from "../recorder/importer.js";
 
-// Lag budgets. Telemetry is polled at 10 Hz → we expect a fresh row every 100 ms;
-// 3 s is 30× the interval, generous enough to smooth over one dropped poll cycle
-// without hiding a real recorder failure. Frames vary by kind (chamber 5 Hz,
-// thermal 2 Hz, galvo variable) — 10 s covers the slowest kind.
+// "Recording" is measured against the NVMe spool, entirely in memory — NOT
+// against MAX(ts) in Postgres. The old DB-lag check was itself the flapping
+// bug: under print-time write load on the SMR disk the healthy baseline sat
+// at ~2.5–3.0 s against a 3 s budget (and the MAX(ts) probes took 10–20 s,
+// piling more load on the pool they were measuring). Spool appends complete
+// in microseconds, so lag here means the upstream frames stopped or the
+// spool disk is failing — the two things this banner exists to catch.
+//
+// Telemetry is polled at 10 Hz → a fresh append every 100 ms; 3 s is 30× the
+// interval, generous enough to smooth over one dropped poll cycle without
+// hiding a real recorder failure.
 const TELEMETRY_MAX_LAG_MS = 3_000;
-const FRAMES_MAX_LAG_MS = 10_000;
+// A spool write error is alarming for this long after it fires.
+const SPOOL_ERROR_FRESH_MS = 10_000;
 const FIRMWARE_POLL_TIMEOUT_MS = 2_000;
 const STARTUP_GRACE_MS = 10_000;
 
@@ -23,6 +32,15 @@ export type RecordingState =
   | "PRINTER_UNREACHABLE"
   | "STARTING_UP";
 
+interface SpoolStreamHealth {
+  // Last frame received from the plugin/firmware (any build state).
+  frame_lag_ms: number | null;
+  // Last line appended to the spool (only advances during a build).
+  append_lag_ms: number | null;
+  lines: number;
+  last_error: { at_ms: number; message: string } | null;
+}
+
 export interface HealthResult {
   overall: RecordingState;
   reason: string;
@@ -33,18 +51,13 @@ export interface HealthResult {
     is_printing: boolean;
     error?: string;
   };
-  db: {
+  build: {
     current_build_id: number | null;
-    telemetry_last_ts_ms: number | null;
-    telemetry_lag_ms: number | null;
-    frames_last_ts_ms: number | null;
-    frames_lag_ms: number | null;
-    position_hf_last_ts_ms: number | null;
-    position_hf_lag_ms: number | null;
   };
+  spool: Record<SpoolStream, SpoolStreamHealth>;
+  importer: ImporterStatus | null;
   budgets: {
     telemetry_max_lag_ms: number;
-    frames_max_lag_ms: number;
   };
 }
 
@@ -91,51 +104,28 @@ async function fetchFirmwareState(): Promise<HealthResult["firmware"]> {
   }
 }
 
-async function fetchDbLags(buildId: number | null): Promise<Omit<HealthResult["db"], "current_build_id">> {
-  const empty = {
-    telemetry_last_ts_ms: null,
-    telemetry_lag_ms: null,
-    frames_last_ts_ms: null,
-    frames_lag_ms: null,
-    position_hf_last_ts_ms: null,
-    position_hf_lag_ms: null,
-  };
-  if (buildId === null) return empty;
-  if (isShuttingDown()) return empty;
-  // Each MAX(ts) uses the (build_id, ts DESC) index — index-only scan, cheap
-  // regardless of table size. Bundled into one round-trip.
-  const { rows } = await pool.query<{
-    telemetry_last: Date | null;
-    frames_last: Date | null;
-    position_hf_last: Date | null;
-  }>(
-    `SELECT
-       (SELECT MAX(ts) FROM telemetry WHERE build_id = $1)   AS telemetry_last,
-       (SELECT MAX(ts) FROM frames WHERE build_id = $1)      AS frames_last,
-       (SELECT MAX(ts) FROM position_hf WHERE build_id = $1) AS position_hf_last`,
-    [buildId],
-  );
-  const r = rows[0];
-  const now = Date.now();
-  const asMs = (d: Date | null | undefined) => (d ? new Date(d).getTime() : null);
-  const telemetry_last_ts_ms = asMs(r?.telemetry_last);
-  const frames_last_ts_ms = asMs(r?.frames_last);
-  const position_hf_last_ts_ms = asMs(r?.position_hf_last);
-  return {
-    telemetry_last_ts_ms,
-    telemetry_lag_ms: telemetry_last_ts_ms != null ? now - telemetry_last_ts_ms : null,
-    frames_last_ts_ms,
-    frames_lag_ms: frames_last_ts_ms != null ? now - frames_last_ts_ms : null,
-    position_hf_last_ts_ms,
-    position_hf_lag_ms: position_hf_last_ts_ms != null ? now - position_hf_last_ts_ms : null,
-  };
+function snapshotSpool(now: number): HealthResult["spool"] {
+  const stats = getSpoolStats();
+  const out = {} as HealthResult["spool"];
+  for (const stream of SPOOL_STREAMS) {
+    const s = stats[stream];
+    out[stream] = {
+      frame_lag_ms: s.lastFrameAt != null ? now - s.lastFrameAt : null,
+      append_lag_ms: s.lastAppendAt != null ? now - s.lastAppendAt : null,
+      lines: s.lines,
+      last_error: s.lastError ? { at_ms: s.lastError.at, message: s.lastError.message } : null,
+    };
+  }
+  return out;
 }
 
 function classify(
   firmware: HealthResult["firmware"],
-  db: HealthResult["db"],
+  buildId: number | null,
+  spool: HealthResult["spool"],
+  now: number,
 ): { overall: RecordingState; reason: string } {
-  if (Date.now() - SERVER_STARTED_AT < STARTUP_GRACE_MS) {
+  if (now - SERVER_STARTED_AT < STARTUP_GRACE_MS) {
     return { overall: "STARTING_UP", reason: "server startup grace period" };
   }
   if (!firmware.reachable) {
@@ -145,23 +135,32 @@ function classify(
     };
   }
   if (firmware.is_printing) {
-    if (db.current_build_id === null) {
+    if (buildId === null) {
       return {
         overall: "PRINTING_NOT_RECORDING",
         reason:
           "firmware reports printing but recorder has no current build_id — the job detector didn't see the build start",
       };
     }
-    if (db.telemetry_lag_ms === null || db.telemetry_lag_ms > TELEMETRY_MAX_LAG_MS) {
-      const lag = db.telemetry_lag_ms == null ? "no rows for this build" : `${db.telemetry_lag_ms}ms`;
+    for (const stream of SPOOL_STREAMS) {
+      const err = spool[stream].last_error;
+      if (err && now - err.at_ms < SPOOL_ERROR_FRESH_MS) {
+        return {
+          overall: "PRINTING_NOT_RECORDING",
+          reason: `spool write failing for ${stream}: ${err.message}`,
+        };
+      }
+    }
+    const lag = spool.telemetry.append_lag_ms;
+    if (lag === null || lag > TELEMETRY_MAX_LAG_MS) {
       return {
         overall: "PRINTING_NOT_RECORDING",
-        reason: `firmware reports printing but telemetry lag = ${lag} (budget ${TELEMETRY_MAX_LAG_MS}ms)`,
+        reason: `firmware reports printing but last telemetry spool append was ${lag == null ? "never" : `${lag}ms ago`} (budget ${TELEMETRY_MAX_LAG_MS}ms)`,
       };
     }
     return {
       overall: "RECORDING",
-      reason: `phase=${firmware.phase}, telemetry lag ${db.telemetry_lag_ms}ms, build_id=${db.current_build_id}`,
+      reason: `phase=${firmware.phase}, telemetry append lag ${lag}ms, build_id=${buildId}`,
     };
   }
   return {
@@ -189,19 +188,21 @@ async function logTransition(
 }
 
 export async function evaluateHealth(): Promise<HealthResult> {
-  const [firmware, buildId] = [await fetchFirmwareState(), currentBuildId()];
-  const dbLags = await fetchDbLags(buildId);
-  const db: HealthResult["db"] = { current_build_id: buildId, ...dbLags };
-  const { overall, reason } = classify(firmware, db);
+  const firmware = await fetchFirmwareState();
+  const now = Date.now();
+  const buildId = currentBuildId();
+  const spool = snapshotSpool(now);
+  const { overall, reason } = classify(firmware, buildId, spool, now);
   const result: HealthResult = {
     overall,
     reason,
-    timestamp_ms: Date.now(),
+    timestamp_ms: now,
     firmware,
-    db,
+    build: { current_build_id: buildId },
+    spool,
+    importer: getImporterStatus(),
     budgets: {
       telemetry_max_lag_ms: TELEMETRY_MAX_LAG_MS,
-      frames_max_lag_ms: FRAMES_MAX_LAG_MS,
     },
   };
   if (overall !== lastState) {

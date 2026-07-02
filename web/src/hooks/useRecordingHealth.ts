@@ -7,6 +7,15 @@ export type RecordingState =
   | "PRINTER_UNREACHABLE"
   | "STARTING_UP";
 
+export type SpoolStream = "telemetry" | "position" | "plotter" | "frames";
+
+export interface SpoolStreamHealth {
+  frame_lag_ms: number | null;
+  append_lag_ms: number | null;
+  lines: number;
+  last_error: { at_ms: number; message: string } | null;
+}
+
 export interface RecordingHealth {
   overall: RecordingState;
   reason: string;
@@ -17,18 +26,15 @@ export interface RecordingHealth {
     is_printing: boolean;
     error?: string;
   };
-  db: {
+  build: {
     current_build_id: number | null;
-    telemetry_last_ts_ms: number | null;
-    telemetry_lag_ms: number | null;
-    frames_last_ts_ms: number | null;
-    frames_lag_ms: number | null;
-    position_hf_last_ts_ms: number | null;
-    position_hf_lag_ms: number | null;
   };
+  // Print-time recording is measured against the NVMe spool (in-memory on the
+  // server), not the DB — Postgres only receives the data after the build ends.
+  spool: Record<SpoolStream, SpoolStreamHealth>;
+  importer: { buildId: number; stream: SpoolStream; rowsInserted: number } | null;
   budgets: {
     telemetry_max_lag_ms: number;
-    frames_max_lag_ms: number;
   };
 }
 

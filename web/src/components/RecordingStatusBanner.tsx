@@ -61,8 +61,9 @@ export function RecordingStatusBanner() {
   const Icon = s.Icon;
 
   const detail = health?.reason ?? "no health check yet";
-  const telemetryLag = health?.db.telemetry_lag_ms;
-  const buildId = health?.db.current_build_id;
+  const telemetryLag = health?.spool.telemetry.append_lag_ms;
+  const buildId = health?.build.current_build_id;
+  const importer = health?.importer;
 
   const enableAlerts = async () => {
     const p = await requestNotificationPermission();
@@ -88,6 +89,11 @@ export function RecordingStatusBanner() {
         {clientState === "PRINTING_NOT_RECORDING" && telemetryLag != null && (
           <span className="opacity-90 text-[10px] font-mono">
             {(telemetryLag / 1000).toFixed(0)}s stale
+          </span>
+        )}
+        {clientState === "IDLE" && importer != null && (
+          <span className="opacity-80 text-[10px] font-mono">
+            importing build {importer.buildId} · {importer.stream} · {importer.rowsInserted.toLocaleString()} rows
           </span>
         )}
       </div>

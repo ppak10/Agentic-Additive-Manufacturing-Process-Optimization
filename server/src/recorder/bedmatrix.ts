@@ -3,8 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { pool } from "../db/pool.js";
 import { currentBuildId, isShuttingDown } from "./state.js";
+import { appendSpool } from "./spool.js";
+import type { FrameSpoolLine } from "./camera.js";
 
 interface BedMatrixFrame {
   respondedAt: string;
@@ -64,10 +65,10 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
             values: frame.data.values,
           }),
         );
-        await pool.query(
-          `INSERT INTO frames (build_id, ts, kind, path) VALUES ($1, $2, $3, $4)`,
-          [buildId, ts, "bedmatrix", relPath],
-        );
+        // Metadata goes to the NVMe spool, not the DB — the frames row is
+        // INSERTed by the importer after the build ends.
+        const line: FrameSpoolLine = { respondedAt: ts.toISOString(), kind: "bedmatrix", path: relPath };
+        appendSpool("frames", buildId, JSON.stringify(line));
       } catch (err) {
         log.warn({ err }, "bedmatrix frame write failed");
       }
