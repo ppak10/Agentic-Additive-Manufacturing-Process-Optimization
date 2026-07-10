@@ -529,6 +529,40 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Print-setup overrides — the firmware's native mid-print tuning channel
+  // (IPrintingService.SetupOverrides): phase temperature targets [°C], total
+  // laser energy percent, fill energy density, outline energy densities.
+  // Reset to empty by the firmware at every print start, so only meaningful
+  // during a print. GET includes `defaults` (the running profile's baseline)
+  // for UI placeholders. POST takes the same partial {values:{...}} shape as
+  // layer-overrides; laserOutlineEnergyDensities takes an array or null.
+  app.get("/api/printing/setup-overrides", httpProxy("/printing/setup-overrides"));
+  app.post<{ Body: { values?: Record<string, number | number[] | null> } }>(
+    "/api/printing/setup-overrides",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      if (!req.body?.values || typeof req.body.values !== "object") {
+        return reply.code(400).send({ error: "body.values (object) required" });
+      }
+      try {
+        const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/setup-overrides`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ values: req.body.values }),
+        });
+        if (r.status === 400) return reply.code(400).send(await r.json());
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        return await r.json();
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
   // Mid-print include/exclude toggle. POST body forwarded as JSON. Same
   // circuit-breaker key as the GETs since both share the plugin host.
   app.post<{ Params: { id: string }; Body: { excluded?: boolean } }>(

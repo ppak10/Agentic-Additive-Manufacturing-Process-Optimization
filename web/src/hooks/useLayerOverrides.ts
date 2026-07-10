@@ -16,6 +16,10 @@ export interface LayerOverrideField {
   iOptions: number | null;
   iOptionsMonitor: number | null;
   savedState: number | null;
+  // The running print profile's value for this knob (converted to override
+  // units plugin-side, e.g. profile percent → factor) — the effective value
+  // while no override is set. Null when idle or the knob is config-only.
+  profileValue: number | null;
 }
 
 export interface LayerOverridesState {

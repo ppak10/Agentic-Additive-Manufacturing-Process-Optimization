@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { useRecoaterPasses } from "@/hooks/useRecoaterPasses";
 import { useRecoaterPassesFull } from "@/hooks/useRecoaterPassesFull";
 import { useLayerOverrides } from "@/hooks/useLayerOverrides";
+import { useSetupOverrides } from "@/hooks/useSetupOverrides";
 
 // Panel for runtime overrides — values that mutate the print pipeline's
 // LayerClientOptions on the fly. Effect applies from the NEXT layer onward
@@ -136,6 +137,24 @@ function OverrideNumberRow({
 
 // Frontend-side presentation for the generic override fields. Anything the
 // plugin reports that isn't listed falls back to its raw name.
+// Print-setup override fields (the firmware's mid-print tune channel).
+// Ranges mirror the plugin-side validation; values are profile units
+// (temps °C, energy density in profile units ~15, total energy in %).
+const SETUP_OVERRIDE_META: {
+  name: string;
+  label: string;
+  unit: string;
+  min: number;
+  max: number;
+  step: number;
+}[] = [
+  { name: "beginLayerTemperatureTarget", label: "Layer temp", unit: "°C", min: 0, max: 300, step: 0.5 },
+  { name: "bedPreparationTemperatureTarget", label: "Bed prep temp", unit: "°C", min: 0, max: 300, step: 0.5 },
+  { name: "printCapTemperatureTarget", label: "Print cap temp", unit: "°C", min: 0, max: 300, step: 0.5 },
+  { name: "totalEnergyDensityPercent", label: "Total energy", unit: "%", min: 1, max: 500, step: 1 },
+  { name: "laserFillEnergyDensity", label: "Fill energy density", unit: "", min: 0, max: 100, step: 0.5 },
+];
+
 const LAYER_OVERRIDE_META: Record<string, { label: string; unit?: string; step?: number }> = {
   recoaterPowderSpeedFactorOverride: { label: "Powder zone speed", unit: "×", step: 0.05 },
   recoaterPrintSpeedFactorOverride: { label: "Print bed speed", unit: "×", step: 0.05 },
@@ -153,6 +172,7 @@ export function OverridePanel() {
   const passes = useRecoaterPasses();
   const full = useRecoaterPassesFull();
   const overrides = useLayerOverrides();
+  const setup = useSetupOverrides();
 
   const passesStatus =
     passes.value === null
@@ -211,6 +231,42 @@ export function OverridePanel() {
             powder
           </label>
         </OverrideNumberRow>
+        {setup.available !== false && (
+          <>
+            <div className="text-[10px] uppercase tracking-wide opacity-40 pt-1">
+              Print setup overrides (mid-print)
+            </div>
+            {SETUP_OVERRIDE_META.map((m) => {
+              const value = setup.values[m.name] ?? null;
+              const def = setup.defaults[m.name] ?? null;
+              const statusText =
+                value === null
+                  ? def !== null
+                    ? `profile: ${def}${m.unit ? ` ${m.unit}` : ""}`
+                    : "using profile value"
+                  : `override active: ${value}${m.unit ? ` ${m.unit}` : ""}${
+                      def !== null ? ` (profile: ${def})` : ""
+                    }`;
+              return (
+                <OverrideNumberRow
+                  key={m.name}
+                  id={`setup-override-${m.name}`}
+                  label={m.unit ? `${m.label} (${m.unit})` : m.label}
+                  value={value}
+                  placeholder={def !== null ? String(def) : "profile"}
+                  statusText={statusText}
+                  busy={setup.busy}
+                  error={setup.error}
+                  onCommit={(n) => setup.setFields({ [m.name]: n })}
+                  min={m.min}
+                  max={m.max}
+                  step={m.step}
+                  integer={false}
+                />
+              );
+            })}
+          </>
+        )}
         {genericFields.length > 0 && (
           <div className="text-[10px] uppercase tracking-wide opacity-40 pt-1">
             Firmware layer overrides
@@ -218,18 +274,25 @@ export function OverridePanel() {
         )}
         {genericFields.map((f) => {
           const meta = LAYER_OVERRIDE_META[f.name] ?? { label: f.name };
-          const current = f.iOptionsMonitor;
+          // The value in force while no override is set: the running
+          // profile's value when it carries this knob, otherwise whatever the
+          // firmware options currently hold (config default / pinned value).
+          const effective = f.profileValue ?? f.iOptionsMonitor;
+          const effectiveSource = f.profileValue !== null ? "profile" : "firmware";
+          const unit = meta.unit ? ` ${meta.unit}` : "";
           const statusText =
             f.savedState === null
-              ? `firmware: ${current ?? "unset"}${meta.unit ? ` ${meta.unit}` : ""}`
-              : `override active: ${f.savedState}${meta.unit ? ` ${meta.unit}` : ""}`;
+              ? `${effectiveSource}: ${effective ?? "unset"}${unit}`
+              : `override active: ${f.savedState}${unit}${
+                  effective !== null ? ` (${effectiveSource}: ${effective})` : ""
+                }`;
           return (
             <OverrideNumberRow
               key={f.name}
               id={`layer-override-${f.name}`}
               label={meta.unit ? `${meta.label} (${meta.unit})` : meta.label}
               value={f.savedState}
-              placeholder={current !== null ? String(current) : "unset"}
+              placeholder={effective !== null ? String(effective) : "unset"}
               statusText={statusText}
               busy={overrides.busy}
               disabled={overrides.available === false}
@@ -248,7 +311,10 @@ export function OverridePanel() {
           instead run one normal recoat plus N−1 repeat sweeps at the same bed height (bypassing
           staging while active); with powder checked each repeat feeds a fresh full dose
           (short-feed compensation — budget extra cap powder in the profile), unchecked they run
-          dry for clearing debris. Overrides apply from the next print layer onward.
+          dry for clearing debris. Print setup overrides use the firmware&apos;s own mid-print
+          tune channel (temperatures and laser energy) and reset at every print start; outline
+          energy densities are API-only for now. Overrides apply from the next print layer
+          onward.
         </div>
       </CardContent>
     </Card>
