@@ -25,9 +25,11 @@ const READ_ONLY_TOOLS = [
   "layer_overrides_get",
 ];
 
+// Spawn through launch.cjs — the same entry point every harness manifest
+// uses — so the smoke test also covers dep resolution/bootstrap.
 const transport = new StdioClientTransport({
-  command: path.join(pluginRoot, "node_modules", ".bin", "tsx"),
-  args: [path.join(pluginRoot, "src", "index.ts")],
+  command: process.execPath,
+  args: [path.join(pluginRoot, "scripts", "launch.cjs")],
   env: { ...process.env } as Record<string, string>,
 });
 const client = new Client({ name: "smoke", version: "0.0.0" });

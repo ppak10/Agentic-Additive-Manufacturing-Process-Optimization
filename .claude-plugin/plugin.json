@@ -8,7 +8,12 @@
   "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
   "repository": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
   "license": "MIT",
-  "keywords": ["sls", "additive-manufacturing", "process-optimization", "mcp"],
+  "keywords": [
+    "sls",
+    "additive-manufacturing",
+    "process-optimization",
+    "mcp"
+  ],
   "mcpServers": {
     "agentic-sls": {
       "command": "uv",
@@ -20,7 +25,7 @@
         "agentic_sls.mcp"
       ],
       "env": {
-        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}/src",
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}",
         "AGENTIC_SLS_PROJECT_DIR": "$CLAUDE_PROJECT_DIR"
       }
     }

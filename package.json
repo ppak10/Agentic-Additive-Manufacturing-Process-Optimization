@@ -1,6 +1,19 @@
 {
   "name": "agentic-sls",
   "version": "0.0.1",
+  "private": true,
   "type": "module",
-  "main": ".opencode/plugins/agentic-sls.ts"
+  "main": ".opencode/plugins/agentic-sls.ts",
+  "workspaces": ["server", "web", "plugin"],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "smoke": "npm run smoke -w plugin"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
 }

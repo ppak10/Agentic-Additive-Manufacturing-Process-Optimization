@@ -20,8 +20,11 @@ Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optim
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Flat layout: the package lives at repo-root agentic_sls/ beside the TS
+# workspaces (web/, server/, plugin/) — only the Python package belongs in
+# the wheel.
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["agentic_sls*"]
 
 [tool.setuptools.package-data]
 "agentic_sls" = ["py.typed"]

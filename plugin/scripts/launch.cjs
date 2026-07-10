@@ -9,7 +9,20 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 
-if (!existsSync(path.join(root, "node_modules"))) {
+// Deps may be hoisted to a parent (npm workspaces in the monorepo) or local
+// (bare clone by a harness) — walk upward for the tsx shim rather than
+// assuming a location.
+const tsxShim = process.platform === "win32" ? "tsx.cmd" : "tsx";
+function findTsx() {
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "node_modules", ".bin", tsxShim);
+    if (existsSync(candidate)) return candidate;
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+let tsx = findTsx();
+if (tsx === null) {
   const install = spawnSync(
     "npm",
     ["install", "--no-audit", "--no-fund", "--loglevel=error"],
@@ -19,14 +32,12 @@ if (!existsSync(path.join(root, "node_modules"))) {
     console.error("agentic-sls: npm install failed");
     process.exit(install.status ?? 1);
   }
+  tsx = findTsx();
+  if (tsx === null) {
+    console.error("agentic-sls: tsx not found after npm install");
+    process.exit(1);
+  }
 }
-
-const tsx = path.join(
-  root,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "tsx.cmd" : "tsx",
-);
 const child = spawn(tsx, [path.join(root, "src", "index.ts")], {
   cwd: root,
   stdio: "inherit",

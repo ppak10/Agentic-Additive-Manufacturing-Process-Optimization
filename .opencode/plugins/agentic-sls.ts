@@ -51,7 +51,7 @@ export const AgenticSlsPlugin = async ({ directory }: PluginContext): Promise<Pl
         type: 'local',
         command: ['uv', '--directory', repoRoot, 'run', '-m', 'agentic_sls.mcp'],
         environment: {
-          PYTHONPATH: path.join(repoRoot, 'src'),
+          PYTHONPATH: repoRoot,
           AGENTIC_SLS_PROJECT_DIR: projectDir,
         },
       };
