@@ -1,0 +1,19 @@
+{
+  "name": "agentic-sls",
+  "description": "Agentic SLS process control for the SLS4All Inova — printer status, recoater passes, and mid-print layer overrides",
+  "version": "0.1.0",
+  "author": {
+    "name": "Peter Pak",
+    "email": "ppak10@gmail.com"
+  },
+  "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
+  "repository": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
+  "license": "MIT",
+  "keywords": ["sls", "additive-manufacturing", "sls4all", "inova", "mcp", "process-optimization"],
+  "mcpServers": {
+    "agentic-sls": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch.cjs"]
+    }
+  }
+}

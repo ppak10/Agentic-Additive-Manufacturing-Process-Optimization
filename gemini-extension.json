@@ -1,0 +1,12 @@
+{
+  "name": "agentic-sls",
+  "description": "Agentic SLS process control for the SLS4All Inova — printer status, recoater passes, and mid-print layer overrides",
+  "version": "0.1.0",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "agentic-sls": {
+      "command": "node",
+      "args": ["${extensionPath}/plugin/scripts/launch.cjs"]
+    }
+  }
+}

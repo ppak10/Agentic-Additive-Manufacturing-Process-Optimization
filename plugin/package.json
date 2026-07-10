@@ -1,0 +1,39 @@
+{
+  "name": "@ppak10/agentic-sls-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for agentic SLS process control on the SLS4All Inova — printer status, recoater passes, and mid-print layer overrides",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Peter Pak",
+    "email": "ppak10@gmail.com"
+  },
+  "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization.git",
+    "directory": "plugin"
+  },
+  "keywords": ["mcp", "sls", "additive-manufacturing", "sls4all", "inova", "process-optimization"],
+  "bin": {
+    "agentic-sls-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "tsx tests/smoke.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "tsx": "^4.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

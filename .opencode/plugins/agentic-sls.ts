@@ -24,8 +24,11 @@ interface PluginHooks {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pluginRoot = path.resolve(__dirname, '../..');
-const skillsDir = path.join(pluginRoot, 'skills');
+const repoRoot = path.resolve(__dirname, '../..');
+const skillsDirs = [
+  path.join(repoRoot, 'skills'),
+  path.join(repoRoot, 'plugin', 'skills'),
+];
 
 export const AgenticSlsPlugin = async ({ directory }: PluginContext): Promise<PluginHooks> => {
   const projectDir = directory ?? process.cwd();
@@ -33,19 +36,32 @@ export const AgenticSlsPlugin = async ({ directory }: PluginContext): Promise<Pl
   return {
     config: async (config) => {
       config.mcp ??= {};
+
+      // Process-control server (TypeScript, plugin/): printer status,
+      // recoater passes, layer overrides via the Inova-API-Plugin on :5001.
       config.mcp['agentic-sls'] = {
         type: 'local',
-        command: ['uv', '--directory', pluginRoot, 'run', '-m', 'agentic_sls.mcp'],
+        command: ['node', path.join(repoRoot, 'plugin', 'scripts', 'launch.cjs')],
+        enabled: true,
+      };
+
+      // Legacy Python server: /api/status polling + chamber camera capture
+      // against the firmware's port-80 API.
+      config.mcp['agentic-sls-py'] = {
+        type: 'local',
+        command: ['uv', '--directory', repoRoot, 'run', '-m', 'agentic_sls.mcp'],
         environment: {
-          PYTHONPATH: path.join(pluginRoot, 'src'),
+          PYTHONPATH: path.join(repoRoot, 'src'),
           AGENTIC_SLS_PROJECT_DIR: projectDir,
         },
       };
 
       config.skills ??= {};
       config.skills.paths ??= [];
-      if (!config.skills.paths.includes(skillsDir)) {
-        config.skills.paths.push(skillsDir);
+      for (const dir of skillsDirs) {
+        if (!config.skills.paths.includes(dir)) {
+          config.skills.paths.push(dir);
+        }
       }
     },
   };

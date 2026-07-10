@@ -9,18 +9,15 @@
   "plugins": [
     {
       "name": "agentic-sls",
+      "source": "./plugin",
       "description": "Agentic process optimization for selective laser sintering (SLS) additive manufacturing.",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "author": {
         "name": "Peter Pak"
       },
       "category": "development",
       "keywords": ["sls", "additive-manufacturing", "process-optimization", "mcp"],
-      "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization",
-      "source": {
-        "source": "github",
-        "repo": "ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
-      }
+      "homepage": "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
     }
   ]
 }
