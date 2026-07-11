@@ -7,6 +7,9 @@ import { Dashboard } from "@/pages/Dashboard";
 import { Recording } from "@/pages/Recording";
 import { Database } from "@/pages/Database";
 import { Replay } from "@/pages/Replay";
+import { PrintProfiles } from "@/pages/PrintProfiles";
+import { Jobs } from "@/pages/Jobs";
+import { PowderTuning } from "@/pages/PowderTuning";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 
@@ -14,6 +17,9 @@ const NAV = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/recording", label: "Recording", end: false },
   { to: "/database", label: "Database", end: false },
+  { to: "/profiles", label: "Profiles", end: false },
+  { to: "/jobs", label: "Jobs", end: false },
+  { to: "/powder-tuning", label: "Powder Tuning", end: false },
 ] as const;
 
 function NavTab({ to, label, end }: { to: string; label: string; end: boolean }) {
@@ -76,6 +82,9 @@ export function App() {
             <Route path="/recording" element={<Recording />} />
             <Route path="/database" element={<Database />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
+            <Route path="/profiles" element={<PrintProfiles />} />
+            <Route path="/jobs" element={<Jobs />} />
+            <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

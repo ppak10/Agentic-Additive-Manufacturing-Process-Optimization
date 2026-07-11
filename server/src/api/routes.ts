@@ -592,6 +592,111 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Print profile CRUD — thin proxy to the plugin's /profiles/* routes.
+  // Profiles are bare JSON (no {respondedAt,data} envelope); status codes
+  // pass through: 200/201/204 for success, 400 for bad input, 404 not found.
+  //
+  // Generic helper: forward method + body to the plugin and relay the reply.
+  // Keyed on the plugin circuit breaker, same as the other plugin routes.
+  const pluginProxy = async (
+    method: string,
+    path: string,
+    body: unknown,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    reply: any,
+  ): Promise<unknown> => {
+    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
+    try {
+      const opts: RequestInit = { method };
+      if (body !== undefined && method !== "DELETE" && method !== "GET") {
+        opts.headers = { "content-type": "application/json" };
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(`${config.INOVA_API_BASE_URL}${path}`, opts);
+      if (r.status === 204) return reply.code(204).send();
+      const payload: unknown = await r.json().catch(() => ({ status: r.status }));
+      // Surface 400/404 to the client directly; everything else non-2xx → 502.
+      const code = r.ok
+        ? r.status
+        : r.status === 400 || r.status === 404
+          ? r.status
+          : 502;
+      return reply.code(code).send(payload);
+    } catch (err) {
+      tripUpstream(config.INOVA_API_BASE_URL);
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+    }
+  };
+
+  app.get("/api/profiles", (_req, reply) =>
+    pluginProxy("GET", "/profiles", undefined, reply),
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { merged?: string } }>(
+    "/api/profiles/:id",
+    (req, reply) => {
+      const qs = req.query.merged === "true" ? "?merged=true" : "";
+      return pluginProxy("GET", `/profiles/${encodeURIComponent(req.params.id)}${qs}`, undefined, reply);
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>("/api/profiles", (req, reply) =>
+    pluginProxy("POST", "/profiles", req.body, reply),
+  );
+
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/api/profiles/:id",
+    (req, reply) =>
+      pluginProxy("PUT", `/profiles/${encodeURIComponent(req.params.id)}`, req.body, reply),
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/profiles/:id", (req, reply) =>
+    pluginProxy("DELETE", `/profiles/${encodeURIComponent(req.params.id)}`, undefined, reply),
+  );
+
+  // Powder tuning session commands — thin proxies to the plugin's /powder-tuning/* routes.
+  // The session must be started from the firmware wizard; these endpoints control it once running.
+  app.get("/api/powder-tuning/status", (_req, reply) =>
+    pluginProxy("GET", "/powder-tuning/status", undefined, reply));
+  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/layer", (req, reply) =>
+    pluginProxy("POST", "/powder-tuning/layer", req.body, reply));
+  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/bed-level", (req, reply) =>
+    pluginProxy("POST", "/powder-tuning/bed-level", req.body, reply));
+  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/surface", (req, reply) =>
+    pluginProxy("POST", "/powder-tuning/surface", req.body, reply));
+  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/params", (req, reply) =>
+    pluginProxy("POST", "/powder-tuning/params", req.body, reply));
+  app.get("/api/powder-tuning/print/setup", (_req, reply) =>
+    pluginProxy("GET", "/powder-tuning/print/setup", undefined, reply));
+  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/print", (req, reply) =>
+    pluginProxy("POST", "/powder-tuning/print", req.body, reply));
+  app.post("/api/powder-tuning/stop", (_req, reply) =>
+    pluginProxy("POST", "/powder-tuning/stop", undefined, reply));
+
+  // Job CRUD — thin proxy to the plugin's /jobs/* routes. Same circuit-breaker
+  // key as the other plugin routes. Jobs are bare JSON (no {respondedAt,data}
+  // envelope). PATCH /jobs/:id accepts { name?, printProfileId? }.
+  app.get("/api/jobs", (_req, reply) =>
+    pluginProxy("GET", "/jobs", undefined, reply),
+  );
+
+  app.get<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
+    pluginProxy("GET", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
+  );
+
+  app.patch<{ Params: { id: string }; Body: { name?: string; printProfileId?: string } }>(
+    "/api/jobs/:id",
+    (req, reply) =>
+      pluginProxy("PATCH", `/jobs/${encodeURIComponent(req.params.id)}`, req.body, reply),
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
+    pluginProxy("DELETE", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
+  );
+
   // Post-build / Postgres-backed command backfill. Serves the recorded log
   // for a specific build+layer; used for replay and frame-to-command
   // correlation analysis. Limit capped to keep response sizes bounded.
