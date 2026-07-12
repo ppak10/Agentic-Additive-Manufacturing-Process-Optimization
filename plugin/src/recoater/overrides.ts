@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
+import { withActionLog } from "../actions.js";
 import { errorResult, jsonResult } from "../result.js";
 
 interface OverrideField {
@@ -77,7 +78,7 @@ export function registerLayerOverrides(server: McpServer, client: InovaClient) {
           ),
       },
     },
-    async ({ values }) => {
+    withActionLog(server, "layer_overrides_set", async ({ values }) => {
       try {
         return jsonResult(
           await client.post("/printing/layer-overrides", { values }),
@@ -85,6 +86,6 @@ export function registerLayerOverrides(server: McpServer, client: InovaClient) {
       } catch (err) {
         return errorResult(err);
       }
-    },
+    }),
   );
 }

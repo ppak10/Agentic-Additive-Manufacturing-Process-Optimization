@@ -3,7 +3,7 @@ import { config } from "./config.js";
 import { applySchema, pool } from "./db/pool.js";
 import { startTelemetryRecorder } from "./recorder/telemetry.js";
 import { startJobDetector } from "./recorder/job.js";
-import { startCameraRecorder } from "./recorder/camera.js";
+import { startCameraRecorder, startChamberRecorder } from "./recorder/camera.js";
 import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
 import { startPositionStreamRecorder } from "./recorder/positionStream.js";
 import { startPlotterStreamRecorder } from "./recorder/plotterStream.js";
@@ -20,7 +20,8 @@ const start = async () => {
   await registerRoutes(fastify);
   startTelemetryRecorder(fastify.log);
   startJobDetector(fastify.log);
-  startCameraRecorder(fastify.log);
+  startChamberRecorder(fastify.log);  // WebSocket stream from plugin (replaces HTTP poll for chamber)
+  startCameraRecorder(fastify.log);   // HTTP poll for thermal + galvo
   startBedMatrixRecorder(fastify.log);
   startPositionStreamRecorder(fastify.log);
   startPlotterStreamRecorder(fastify.log);

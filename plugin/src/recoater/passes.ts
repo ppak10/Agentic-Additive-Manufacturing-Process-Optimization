@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
+import { withActionLog } from "../actions.js";
 import { errorResult, jsonResult } from "../result.js";
 
 // Staged recoater passes: the firmware's Thickness-division mode. N passes
@@ -51,7 +52,7 @@ export function registerRecoaterPasses(server: McpServer, client: InovaClient) {
           ),
       },
     },
-    async ({ value }) => {
+    withActionLog(server, "recoater_passes_set", async ({ value }) => {
       try {
         return jsonResult(
           await client.post("/printing/recoater-passes", { value }),
@@ -59,6 +60,6 @@ export function registerRecoaterPasses(server: McpServer, client: InovaClient) {
       } catch (err) {
         return errorResult(err);
       }
-    },
+    }),
   );
 }

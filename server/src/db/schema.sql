@@ -11,6 +11,13 @@ CREATE TABLE IF NOT EXISTS builds (
 );
 CREATE INDEX IF NOT EXISTS builds_started_at_idx ON builds (started_at DESC);
 
+-- Firmware PrintSession UUID for this build — the bridge between recorder
+-- build ids and the firmware's job/profile world (PrintSessions carry JobId
+-- and ProfileId). Backfilled for historical builds by
+-- scripts/match_build_sessions.py; stamped live at print start once the
+-- plugin exposes the active session.
+ALTER TABLE builds ADD COLUMN IF NOT EXISTS inova_session_id UUID;
+
 CREATE TABLE IF NOT EXISTS telemetry (
   build_id    BIGINT REFERENCES builds(id) ON DELETE CASCADE,
   ts          TIMESTAMPTZ NOT NULL,

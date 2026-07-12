@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { usePrintingObjects, excludePrintingObject, type PrintingObject } from "@/hooks/usePrintingObjects";
 import { usePlotterVersion } from "@/hooks/usePlotterVersion";
 import { usePlotterObjects, type PlotterObjectsState } from "@/hooks/usePlotterObjects";
-import { useJob } from "@/hooks/useJob";
+import type { JobStatus } from "@/hooks/useJob";
 import { useChamber } from "@/hooks/useChamber";
 import { BuildLayout3D } from "@/panels/BuildLayout3D";
 
@@ -228,14 +228,10 @@ function BuildLayoutSvg({
   );
 }
 
-export function BuildLayoutPanel() {
+export function BuildLayoutPanel({ job }: { job: JobStatus | null }) {
   const { objects, unavailable, refresh } = usePrintingObjects(2000);
-  const plotter = usePlotterVersion(1000);
-  const plotterObjects = usePlotterObjects(1000);
-  // The plotter's own layerCount/currentLayer is unreliable for the real
-  // print position (it's the plotter's internal layer index, not the job's).
-  // Use the job status for the user-facing "layer X / Y" header text.
-  const job = useJob(1000);
+  const plotter = usePlotterVersion(2000);
+  const plotterObjects = usePlotterObjects(2000);
   const chamber = useChamber();
   // Phase-1 placeholder slice thickness (typical SLS). When we have a
   // /api/print-profile endpoint we'll pull the real value.

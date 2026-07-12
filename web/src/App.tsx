@@ -1,49 +1,130 @@
 import { useEffect, useState } from "react";
-import { HashRouter, Routes, Route, NavLink, Navigate } from "react-router-dom";
-import { Moon, Sun, Cpu } from "lucide-react";
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
+import {
+  Database,
+  FlaskConical,
+  LayoutDashboard,
+  Layers,
+  Moon,
+  Radio,
+  Settings2,
+  Sun,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { Dashboard } from "@/pages/Dashboard";
 import { Recording } from "@/pages/Recording";
-import { Database } from "@/pages/Database";
+import { Database as DatabasePage } from "@/pages/Database";
 import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
+import { useJob, type JobStatus } from "@/hooks/useJob";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 
-const NAV = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/recording", label: "Recording", end: false },
-  { to: "/database", label: "Database", end: false },
-  { to: "/profiles", label: "Profiles", end: false },
-  { to: "/jobs", label: "Jobs", end: false },
-  { to: "/powder-tuning", label: "Powder Tuning", end: false },
+const NAV_GROUPS = [
+  {
+    label: "Live",
+    items: [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/recording", label: "Recording", icon: Radio, end: false },
+    ],
+  },
+  {
+    label: "Library",
+    items: [
+      { to: "/database", label: "Database", icon: Database, end: false },
+      { to: "/profiles", label: "Profiles", icon: Settings2, end: false },
+      { to: "/jobs", label: "Jobs", icon: Layers, end: false },
+    ],
+  },
+  {
+    label: "Tuning",
+    items: [
+      { to: "/powder-tuning", label: "Powder Tuning", icon: FlaskConical, end: false },
+    ],
+  },
 ] as const;
 
-function NavTab({ to, label, end }: { to: string; label: string; end: boolean }) {
+function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () => void }) {
+  const location = useLocation();
+  const info = usePluginInfo();
+
   return (
-    <NavLink
-      to={to}
-      end={end}
-      className={({ isActive }) =>
-        cn(
-          "px-3 py-1 text-xs font-heading border-2 border-border rounded-base transition-all",
-          isActive
-            ? "bg-main text-main-foreground shadow-shadow"
-            : "bg-secondary-background text-foreground hover:translate-x-boxShadowX hover:translate-y-boxShadowY shadow-shadow hover:shadow-none",
-        )
-      }
-    >
-      {label}
-    </NavLink>
+    <Sidebar collapsible="icon">
+      <SidebarContent>
+        {NAV_GROUPS.map((group) => (
+          <SidebarGroup key={group.label}>
+            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarMenu>
+              {group.items.map((item) => {
+                const isActive = item.end
+                  ? location.pathname === item.to
+                  : location.pathname.startsWith(item.to);
+                return (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton asChild tooltip={item.label} isActive={isActive}>
+                      <NavLink to={item.to} end={item.end}>
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          {info && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={`plugin v${info.version} · up ${formatUptime(info.uptimeSeconds)}`}
+                className="pointer-events-none select-none"
+              >
+                <span className="text-[10px] opacity-50 truncate">
+                  v{info.version} · up {formatUptime(info.uptimeSeconds)}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip={dark ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={onToggleDark}
+            >
+              {dark ? <Sun /> : <Moon />}
+              <span>{dark ? "Light mode" : "Dark mode"}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
   );
 }
 
-export function App() {
+function AppShell() {
   const [dark, setDark] = useState(false);
-  const info = usePluginInfo();
+  // Single useJob call for the whole app — used by the header system stats
+  // and passed down to Dashboard panels (JobPanel, BuildLayoutPanel).
+  const job = useJob(1000);
 
   useEffect(() => {
     if (window.matchMedia("(prefers-color-scheme: dark)").matches) setDark(true);
@@ -54,41 +135,42 @@ export function App() {
   }, [dark]);
 
   return (
-    <HashRouter>
-      <div className="h-full flex flex-col">
-        <header className="flex items-center gap-3 border-b-2 border-border bg-background px-4 py-2">
-          <Cpu className="size-5" />
-          <h1 className="font-heading text-sm">Agentic SLS · Inova MK1</h1>
-          <nav className="ml-4 flex gap-2">
-            {NAV.map((n) => (
-              <NavTab key={n.to} to={n.to} label={n.label} end={n.end} />
-            ))}
-          </nav>
-          <div className="ml-auto flex items-center gap-3">
-            <RecordingStatusBanner />
-            {info && (
-              <span className="text-[10px] opacity-50 hidden md:inline">
-                plugin v{info.version} · up {formatUptime(info.uptimeSeconds)}
-              </span>
-            )}
-            <Button variant="neutral" size="icon" className="size-7" onClick={() => setDark((d) => !d)}>
-              {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
+    <SidebarProvider defaultOpen={true}>
+      <AppSidebar dark={dark} onToggleDark={() => setDark((d) => !d)} />
+      <SidebarInset className="flex flex-col min-h-0">
+        <header className="flex items-center gap-2 border-b-2 border-border bg-background px-3 py-2 shrink-0">
+          <SidebarTrigger />
+          <div className="h-5 w-[2px] bg-border" />
+          <RecordingStatusBanner />
+          {job && (
+            <div className="ml-auto flex items-center gap-4 text-[10px] font-mono opacity-60">
+              <span>cpu {job.cpuTemp.toFixed(0)}°C</span>
+              <span>gpu {job.gpuTemp.toFixed(0)}°C</span>
+              <span>load {job.totalCpuLoad.toFixed(1)}%</span>
+              <span>mem {job.selfUsedMemory}/{job.totalAvailableMemory} MB</span>
+            </div>
+          )}
         </header>
         <main className="flex-1 overflow-auto">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Dashboard job={job} />} />
             <Route path="/recording" element={<Recording />} />
-            <Route path="/database" element={<Database />} />
+            <Route path="/database" element={<DatabasePage />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
             <Route path="/profiles" element={<PrintProfiles />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
-      </div>
-    </HashRouter>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <AppShell />
+    </BrowserRouter>
   );
 }

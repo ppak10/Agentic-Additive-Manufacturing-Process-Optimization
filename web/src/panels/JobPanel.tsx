@@ -1,7 +1,7 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MetricRow } from "@/components/ui/metric-row";
-import { useJob } from "@/hooks/useJob";
+import type { JobStatus } from "@/hooks/useJob";
 import { formatDuration } from "@/lib/utils";
 
 // Split PascalCase (with digits) into a spaced form so the phase badge reads
@@ -26,8 +26,7 @@ function ProgressBar({ percent }: { percent: number }) {
   );
 }
 
-export function JobPanel() {
-  const job = useJob(1000);
+export function JobPanel({ job }: { job: JobStatus | null }) {
   // isActive: a real print is in progress if phase is set to anything other
   // than NotSet. (Previously we OR'd against jobName, which stayed populated
   // between prints, so the badge never fell back to "idle".)

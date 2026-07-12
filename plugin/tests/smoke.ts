@@ -16,6 +16,13 @@ const EXPECTED_TOOLS = [
   "recoater_full_passes_set",
   "layer_overrides_get",
   "layer_overrides_set",
+  "builds_list",
+  "build_get",
+  "astm_query",
+  "telemetry_summary",
+  "db_query",
+  "reference_list",
+  "reference_get",
 ];
 
 const READ_ONLY_TOOLS = [
@@ -23,6 +30,25 @@ const READ_ONLY_TOOLS = [
   "recoater_passes_get",
   "recoater_full_passes_get",
   "layer_overrides_get",
+];
+
+// Knowledge tools hit the recorder Postgres (DATABASE_URL), not the printer
+// — also read-only, also safe mid-print.
+const DATA_CALLS: Array<[string, Record<string, unknown>]> = [
+  ["builds_list", { printed_only: true }],
+  ["build_get", { build_id: 12 }],
+  ["astm_query", { standard: "D638" }],
+  ["astm_query", { material_class: "SLS", group_by: "profile" }],
+  ["telemetry_summary", { build_id: 12, layer_range: [1, 5] }],
+  ["db_query", { sql: "SELECT count(*) AS n FROM astm_specimens" }],
+  ["reference_list", {}],
+  ["reference_get", { id: "fuse1-to-inova-translation" }],
+];
+
+// Must be rejected by the db_query gate.
+const DATA_GUARDS: Array<[string, Record<string, unknown>]> = [
+  ["db_query", { sql: "DELETE FROM builds" }],
+  ["db_query", { sql: "SELECT 1; DELETE FROM builds" }],
 ];
 
 // Spawn through launch.cjs — the same entry point every harness manifest
@@ -53,6 +79,27 @@ for (const name of READ_ONLY_TOOLS) {
     failures += 1;
   } else {
     console.log(`ok   ${name}: ${first?.text?.slice(0, 120).replace(/\s+/g, " ")}…`);
+  }
+}
+
+for (const [name, args] of DATA_CALLS) {
+  const res = await client.callTool({ name, arguments: args });
+  const first = (res.content as Array<{ type: string; text?: string }>)[0];
+  if (res.isError) {
+    console.error(`FAIL ${name} ${JSON.stringify(args)}: ${first?.text}`);
+    failures += 1;
+  } else {
+    console.log(`ok   ${name} ${JSON.stringify(args)}: ${first?.text?.slice(0, 100).replace(/\s+/g, " ")}…`);
+  }
+}
+
+for (const [name, args] of DATA_GUARDS) {
+  const res = await client.callTool({ name, arguments: args });
+  if (res.isError) {
+    console.log(`ok   ${name} rejected ${JSON.stringify(args)}`);
+  } else {
+    console.error(`FAIL ${name} guard did not reject: ${JSON.stringify(args)}`);
+    failures += 1;
   }
 }
 

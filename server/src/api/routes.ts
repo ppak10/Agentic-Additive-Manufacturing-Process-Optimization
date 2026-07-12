@@ -312,6 +312,25 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/temperature/bedmatrix/stream", { websocket: true }, proxyPluginWs("/temperature/bedmatrix/stream"));
 
+  // Chamber camera stream — binary JPEG frames from the plugin's /camera/stream.
+  // Uses a separate proxy handler that passes Buffer data through as-is rather
+  // than stringifying it (the text-proxy above would corrupt binary payloads).
+  app.get("/api/camera/chamber/stream", { websocket: true }, (client, req) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries((req as { query: Record<string, string> }).query))
+      qs.set(k, String(v));
+    const url = `${wsBase}/camera/stream${qs.size ? `?${qs}` : ""}`;
+    const upstream = new WebSocket(url);
+    upstream.on("message", (data, isBinary) => {
+      if (client.readyState === client.OPEN)
+        client.send(data, { binary: isBinary });
+    });
+    upstream.on("close", () => client.close());
+    upstream.on("error", () => client.close());
+    client.on("close", () => upstream.close());
+    client.on("error", () => upstream.close());
+  });
+
   // Position stream uses fan-out from the recorder (not a per-client proxy)
   // because the firmware's PositionChangedHighFrequency AsyncEvent only
   // delivers to the first subscriber. See positionStream.ts comment.

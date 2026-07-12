@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
+import { withActionLog } from "../actions.js";
 import { errorResult, jsonResult } from "../result.js";
 
 // Full-recoat passes: expands each layer into N complete recoat cycles via
@@ -58,7 +59,7 @@ export function registerRecoaterFullPasses(
           ),
       },
     },
-    async ({ value, powder }) => {
+    withActionLog(server, "recoater_full_passes_set", async ({ value, powder }) => {
       try {
         const body: Record<string, unknown> = { value };
         if (powder !== undefined) body.powder = powder;
@@ -68,6 +69,6 @@ export function registerRecoaterFullPasses(
       } catch (err) {
         return errorResult(err);
       }
-    },
+    }),
   );
 }

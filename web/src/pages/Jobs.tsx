@@ -253,13 +253,16 @@ export function Jobs() {
     setJob(null);
   }, [selectedId, deleteJob]);
 
-  // Group list by type for display.
-  const byType = (list ?? []).reduce<Record<string, typeof list>>((acc, j) => {
-    if (!j) return acc;
-    const label = JOB_TYPE_LABELS[j.type] ?? j.type;
-    (acc[label] ??= []).push(j);
-    return acc;
-  }, {});
+  // Group list by type, newest first within each group.
+  const byType = (list ?? [])
+    .slice()
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .reduce<Record<string, typeof list>>((acc, j) => {
+      if (!j) return acc;
+      const label = JOB_TYPE_LABELS[j.type] ?? j.type;
+      (acc[label] ??= []).push(j);
+      return acc;
+    }, {});
 
   return (
     <div className="p-4 flex flex-col gap-4 h-full">

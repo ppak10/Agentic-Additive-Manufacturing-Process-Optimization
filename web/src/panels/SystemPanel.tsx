@@ -1,13 +1,12 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { MetricRow } from "@/components/ui/metric-row";
-import { useJob } from "@/hooks/useJob";
+import type { JobStatus } from "@/hooks/useJob";
 
 // Printer host stats — CPU / GPU temperature, CPU load, memory. These are
 // firmware-reported (SLS4All process on the Inova), not the recorder or the
 // dashboard host. Populated even between prints via the plugin's /info-style
 // telemetry, but the useJob hook only surfaces them during an active print.
-export function SystemPanel() {
-  const job = useJob(1000);
+export function SystemPanel({ job }: { job: JobStatus | null }) {
   const hasData = job !== null;
 
   return (
