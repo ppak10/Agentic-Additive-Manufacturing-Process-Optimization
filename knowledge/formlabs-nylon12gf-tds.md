@@ -28,6 +28,10 @@ Source: formlabs-media.formlabs.com/datasheets/2201635-TDS-ENUS-0.pdf
 - Full progression A→H spans 365 → 2815 MPa as energy density and thermal
   settings improved; query `astm_query {group_by: "profile"}` for the
   profile-by-profile picture.
+- **Flexural (D790)** mirrors it: batch C 285 MPa → batch H **2272 MPa**
+  (TDS 2400), controls 1950 MPa. Note: D790 moduli are chord values
+  recomputed from load-deflection curves (span = 16 × depth); values for
+  very weak batches are lower bounds (crosshead compliance).
 
 ## How to use these numbers
 
