@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DIR="${HOME}/.config/systemd/user"
-UNITS=(agentic-recorder.service agentic-broker.service)
+UNITS=(agentic-recorder.service agentic-broker.service agentic-web.service)
 
 mkdir -p "${UNIT_DIR}"
 for u in "${UNITS[@]}"; do

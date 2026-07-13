@@ -1,0 +1,16 @@
+[Unit]
+Description=Agentic SLS dashboard (vite dev server, port 5173)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/web
+Environment=PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# Vite dev (not a production build): HMR keeps GUI iteration instant, and
+# this dashboard has a LAN audience of one lab. The /api and /agent proxies
+# in vite.config.ts are part of the serving contract.
+ExecStart=/home/linuxbrew/.linuxbrew/bin/npm run dev
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
