@@ -19,6 +19,9 @@ export default defineConfig({
       "/api/camera/chamber/stream": { target: "ws://localhost:3000", ws: true },
       "/api": { target: "http://localhost:3000" },
       "/healthz": { target: "http://localhost:3000" },
+      // Agent session broker (harness/server.ts) — separate process from
+      // the recorder on purpose; SSE flows through the plain HTTP proxy.
+      "/agent": { target: "http://localhost:3100" },
     },
   },
 });

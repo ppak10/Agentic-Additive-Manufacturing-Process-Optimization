@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
-  Database,
+  Bot,
+  Boxes,
   FlaskConical,
   LayoutDashboard,
   Layers,
@@ -27,11 +28,14 @@ import {
 import { cn } from "@/lib/utils";
 import { Dashboard } from "@/pages/Dashboard";
 import { Recording } from "@/pages/Recording";
-import { Database as DatabasePage } from "@/pages/Database";
+import { Builds } from "@/pages/Builds";
+import { BuildCard } from "@/pages/BuildCard";
 import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
+import { Agents } from "@/pages/Agents";
+import { AgentPanel } from "@/components/AgentPanel";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
 import { useJob, type JobStatus } from "@/hooks/useJob";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
@@ -47,7 +51,7 @@ const NAV_GROUPS = [
   {
     label: "Library",
     items: [
-      { to: "/database", label: "Database", icon: Database, end: false },
+      { to: "/builds", label: "Builds", icon: Boxes, end: false },
       { to: "/profiles", label: "Profiles", icon: Settings2, end: false },
       { to: "/jobs", label: "Jobs", icon: Layers, end: false },
     ],
@@ -56,6 +60,12 @@ const NAV_GROUPS = [
     label: "Tuning",
     items: [
       { to: "/powder-tuning", label: "Powder Tuning", icon: FlaskConical, end: false },
+    ],
+  },
+  {
+    label: "Agents",
+    items: [
+      { to: "/agents", label: "Sessions", icon: Bot, end: false },
     ],
   },
 ] as const;
@@ -122,6 +132,7 @@ function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () =>
 
 function AppShell() {
   const [dark, setDark] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   // Single useJob call for the whole app — used by the header system stats
   // and passed down to Dashboard panels (JobPanel, BuildLayoutPanel).
   const job = useJob(1000);
@@ -150,19 +161,34 @@ function AppShell() {
               <span>mem {job.selfUsedMemory}/{job.totalAvailableMemory} MB</span>
             </div>
           )}
+          <Button
+            variant="neutral"
+            size="sm"
+            className={cn("h-7 px-2", !job && "ml-auto")}
+            onClick={() => setAgentOpen((o) => !o)}
+            title="Toggle agent panel"
+          >
+            <Bot className="size-4" />
+          </Button>
         </header>
         <main className="flex-1 overflow-auto">
           <Routes>
             <Route path="/" element={<Dashboard job={job} />} />
             <Route path="/recording" element={<Recording />} />
-            <Route path="/database" element={<DatabasePage />} />
+            <Route path="/builds" element={<Builds />} />
+            <Route path="/builds/:buildId" element={<BuildCard />} />
+            <Route path="/builds/:buildId/replay" element={<Replay />} />
+            {/* legacy paths */}
+            <Route path="/database" element={<Navigate to="/builds" replace />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
             <Route path="/profiles" element={<PrintProfiles />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
+            <Route path="/agents" element={<Agents />} />
           </Routes>
         </main>
       </SidebarInset>
+      {agentOpen && <AgentPanel onClose={() => setAgentOpen(false)} />}
     </SidebarProvider>
   );
 }

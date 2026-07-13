@@ -194,7 +194,7 @@ function Timeline({
 export function Replay() {
   const { buildId } = useParams<{ buildId: string }>();
   const id = Number(buildId);
-  if (!Number.isFinite(id) || id <= 0) return <Navigate to="/database" replace />;
+  if (!Number.isFinite(id) || id <= 0) return <Navigate to="/builds" replace />;
 
   const { manifest, error } = useReplayManifest(id);
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
@@ -232,7 +232,7 @@ export function Replay() {
   return (
     <div className="p-4 grid gap-4">
       <div className="flex items-center gap-3">
-        <Link to="/database" className="flex items-center gap-1 text-xs underline opacity-70 hover:opacity-100">
+        <Link to="/builds" className="flex items-center gap-1 text-xs underline opacity-70 hover:opacity-100">
           <ArrowLeft className="size-3" /> back
         </Link>
         <h2 className="font-heading">
