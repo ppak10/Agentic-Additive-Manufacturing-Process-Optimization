@@ -11,6 +11,8 @@ import { markShuttingDown } from "./recorder/state.js";
 import { startMemoryMonitor, MEMORY_GUARD_EXIT_CODE } from "./recorder/memory.js";
 import { closeAllSpools } from "./recorder/spool.js";
 import { recoverPendingSpools } from "./recorder/importer.js";
+import { reconcileOrphanBuilds } from "./recorder/lifecycle.js";
+import { getLatestPrintingStatus } from "./recorder/job.js";
 import { registerRoutes } from "./api/routes.js";
 
 const fastify = Fastify({ logger: true });
@@ -30,10 +32,18 @@ const start = async () => {
   // heap. Distinct exit code so the supervisor can log "memory restart" vs
   // "clean shutdown" separately.
   startMemoryMonitor(fastify.log, () => shutdown("memory-guard"));
-  // Spool recovery is delayed so the job detector's first polls can re-adopt
-  // an in-progress build first — recovering the ACTIVE build's spool would
-  // import it mid-print and orphan everything appended afterwards.
-  setTimeout(() => void recoverPendingSpools(fastify.log), 15_000).unref();
+  // Spool recovery and orphan-build reconciliation are delayed so the job
+  // detector's first polls can re-adopt an in-progress build first —
+  // recovering the ACTIVE build's spool would import it mid-print and
+  // orphan everything appended afterwards; reconciliation must not close
+  // the build the detector is about to adopt.
+  setTimeout(() => {
+    void recoverPendingSpools(fastify.log);
+    void reconcileOrphanBuilds(
+      fastify.log,
+      getLatestPrintingStatus()?.jobName ?? null,
+    ).catch((err) => fastify.log.error({ err }, "reconciliation failed"));
+  }, 15_000).unref();
   await fastify.listen({ port: config.SERVER_PORT, host: "0.0.0.0" });
 };
 

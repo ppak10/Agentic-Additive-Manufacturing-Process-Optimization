@@ -21,6 +21,11 @@ const schema = z.object({
   // keep the print-time write path off that disk. Contents are imported into
   // Postgres after each build ends (see recorder/importer.ts).
   SPOOL_DIR: z.string().default(resolve(homedir(), ".agentic-sls/spool")),
+  // How long the firmware may be continuously unreachable while a build is
+  // open before the recorder finalizes the build on its own (printer powered
+  // off mid-print, network gone). The build gets ended_at=now(), a note, and
+  // its spool import — same path as a normal print end.
+  UNREACHABLE_FINALIZE_MS: z.coerce.number().int().positive().default(600_000),
 });
 
 export const config = schema.parse(process.env);

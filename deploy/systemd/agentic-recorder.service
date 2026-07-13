@@ -1,0 +1,24 @@
+[Unit]
+Description=Agentic SLS recorder (telemetry + build lifecycle, port 3000)
+# Postgres runs in docker; user units can't order against system docker, so
+# the recorder just retries its DB connection on start failure.
+After=network-online.target
+
+[Service]
+WorkingDirectory=/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/server
+Environment=PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# tsx WITHOUT watch: services must not hot-reload on source edits (that is
+# how a mid-print restart happens). Deploying server changes = edit, then
+# `systemctl --user restart agentic-recorder` at a safe moment.
+ExecStart=/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/node_modules/.bin/tsx src/index.ts
+# on-failure covers crashes AND the memory guard's exit 101; a clean exit 0
+# (SIGTERM, stop-after-build) leaves the service stopped.
+Restart=on-failure
+RestartSec=3
+# Generous heap like run-recorder.sh; the in-process memory guard exits 101
+# well before this ceiling.
+Environment=NODE_OPTIONS=--max-old-space-size=12288
+Environment=RECORDER_MEMORY_GUARD=1
+
+[Install]
+WantedBy=default.target

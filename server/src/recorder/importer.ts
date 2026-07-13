@@ -100,10 +100,22 @@ export function getImporterStatus(): ImporterStatus | null {
 // Imports run strictly one at a time — back-to-back prints enqueue behind
 // each other rather than competing for the disk.
 let queue: Promise<void> = Promise.resolve();
+let queueDepth = 0;
+
+// Number of imports queued or running — 0 means the spool → Postgres path
+// is drained (safe to exit for stop-after-build).
+export function importQueueDepth(): number {
+  return queueDepth;
+}
+
 export function enqueueImport(buildId: number, log: FastifyBaseLogger): void {
+  queueDepth += 1;
   queue = queue
     .then(() => importBuildSpools(buildId, log))
-    .catch((err) => log.error({ err, buildId }, "spool import failed"));
+    .catch((err) => log.error({ err, buildId }, "spool import failed"))
+    .finally(() => {
+      queueDepth -= 1;
+    });
 }
 
 async function insertBatch(

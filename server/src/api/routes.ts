@@ -16,6 +16,12 @@ import { addPlotterSubscriber, removePlotterSubscriber } from "../recorder/plott
 import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
 import { currentMemorySample } from "../recorder/memory.js";
 import { registerHealthRoutes } from "./health.js";
+import { registerKnowledgeRoutes } from "./knowledge.js";
+import {
+  cancelStopAfterBuild,
+  requestStopAfterBuild,
+  stopAfterBuildStatus,
+} from "../recorder/lifecycle.js";
 
 async function dirSizeBytes(dir: string): Promise<number> {
   let total = 0;
@@ -54,6 +60,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // RECORDING" banner in the UI. Does not use getLatestSnapshot() — that would
   // defeat the point of an independent check.
   registerHealthRoutes(app);
+
+  // Build registry + summaries + ASTM for the GUI Builds page (reads the
+  // knowledge tables created by scripts/sync_reference.py).
+  await registerKnowledgeRoutes(app);
+
+  // Maintenance: ask the recorder to exit cleanly (code 0 — supervisor and
+  // systemd both leave it stopped) once the current build has finalized and
+  // its spool import has drained. Replaces kill-by-PID for planned windows.
+  app.post("/api/admin/stop-after-build", async () => {
+    requestStopAfterBuild();
+    return stopAfterBuildStatus();
+  });
+  app.delete("/api/admin/stop-after-build", async () => {
+    const wasRequested = cancelStopAfterBuild();
+    return { cancelled: wasRequested, ...stopAfterBuildStatus() };
+  });
+  app.get("/api/admin/stop-after-build", async () => stopAfterBuildStatus());
 
   app.get("/api/info", async (_req, reply) => {
     if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {

@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { setCurrentBuildId, isShuttingDown } from "./state.js";
 import { enqueueImport } from "./importer.js";
+import { maybeStopAfterBuild } from "./lifecycle.js";
 
 interface PrintingStatus {
   phase: string | null;
@@ -135,6 +136,9 @@ async function recordPhaseChange(
 export function startJobDetector(log: FastifyBaseLogger): void {
   let currentId: number | null = null;
   let prevPs: PrintingStatus | null = null;
+  // First moment the firmware became continuously unreachable while a
+  // build was open; null while reachable.
+  let unreachableSince: number | null = null;
 
   void (async () => {
     while (true) {
@@ -144,6 +148,7 @@ export function startJobDetector(log: FastifyBaseLogger): void {
       ]);
 
       if (ps) {
+        unreachableSince = null;
         latestStatus = ps;
         const active = isActive(ps, fw);
 
@@ -167,8 +172,34 @@ export function startJobDetector(log: FastifyBaseLogger): void {
           }
           prevPs = ps;
         }
+      } else if (currentId !== null && !isShuttingDown()) {
+        // Firmware unreachable with a build open (printer powered off
+        // mid-build, network gone). After a continuous grace period,
+        // finalize the build ourselves — otherwise it stays open forever
+        // and its spool never imports.
+        unreachableSince ??= Date.now();
+        if (Date.now() - unreachableSince >= config.UNREACHABLE_FINALIZE_MS) {
+          const minutes = Math.round((Date.now() - unreachableSince) / 60_000);
+          log.warn(
+            { buildId: currentId, minutes },
+            "firmware unreachable — finalizing open build",
+          );
+          await pool.query(
+            `UPDATE builds SET
+               notes = coalesce(notes || ' ', '') || '[finalized: printer unreachable]'
+             WHERE id = $1`,
+            [currentId],
+          );
+          await closeBuild(currentId, prevPs, log);
+          setCurrentBuildId(null);
+          enqueueImport(currentId, log);
+          currentId = null;
+          prevPs = null;
+          unreachableSince = null;
+        }
       }
 
+      if (currentId === null) maybeStopAfterBuild(log);
       await new Promise((r) => setTimeout(r, 500));
     }
   })();

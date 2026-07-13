@@ -25,6 +25,16 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="${SCRIPT_DIR}/../server"
 
+# Singleton guard: multiple supervisors mean multiple recorders fighting
+# over the port (the losers crash-loop forever). flock on a lockfile makes
+# a second invocation exit immediately instead.
+LOCKFILE="${SCRIPT_DIR}/../.run-recorder.lock"
+exec 9>"${LOCKFILE}"
+if ! flock -n 9; then
+    echo "run-recorder.sh is already running (lock held on ${LOCKFILE}) — exiting."
+    exit 1
+fi
+
 HEAP_MB="${HEAP_MB:-12288}"
 BACKOFF_SECONDS="${BACKOFF_SECONDS:-3}"
 MEMORY_GUARD_EXIT_CODE=101
