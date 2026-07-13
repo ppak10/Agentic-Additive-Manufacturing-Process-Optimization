@@ -42,3 +42,6 @@ build_id,inova_session_id,notes
 41,2e137841-2757-4708-a6f8-70e950ddb4eb,auto: Δstart=169s overlap=243min job='Nameplates 2026_07_09' completed
 42,2e137841-2757-4708-a6f8-70e950ddb4eb,auto: Δstart=14149s overlap=354min job='Nameplates 2026_07_09' completed
 43,a823ed90-e27a-4029-83b5-f4688b1d0b37,auto: Δstart=0s overlap=629min job='D790 and D638 and Nameplate 2026_07_10' completed
+44,20242dc3-221d-4cac-8c3c-976dec8a28eb,auto: Δstart=0s overlap=1min job='D790 and D638 and Other 2026_07_11' incomplete
+45,94291c71-23d1-4883-b2a8-fa854c5fd293,auto: Δstart=0s overlap=1min job='D638 and Bucky 2026_07_12' incomplete
+46,,auto: no overlapping session
