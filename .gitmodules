@@ -7,3 +7,6 @@
 [submodule "sls4all/Inova-API-Plugin"]
 	path = sls4all/Inova-API-Plugin
 	url = git@github.com:ppak10/Inova-API-Plugin.git
+[submodule "sls4all/Inova-Defect-Detection-Model"]
+	path = sls4all/Inova-Defect-Detection-Model
+	url = git@github.com:ppak10/Inova-Defect-Detection-Model.git
