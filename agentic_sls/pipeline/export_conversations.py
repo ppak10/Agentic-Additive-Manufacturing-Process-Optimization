@@ -16,8 +16,8 @@ Safety: refuses to write if any message payload contains a credential
 published; the recorder DB does not.
 
 Usage:
-  uv run scripts/export_conversations.py
-  uv run scripts/export_conversations.py --out /tmp/exports
+  uv run sls-export-conversations
+  uv run sls-export-conversations --out /tmp/exports
 """
 
 from __future__ import annotations

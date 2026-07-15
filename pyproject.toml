@@ -17,6 +17,18 @@ dependencies = [
 Homepage = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
 Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization/issues"
 
+# The data pipeline (agentic_sls/pipeline/): Postgres ⇄ dataset repos ⇄
+# data/exports/. These are the post-print refresh commands.
+[project.scripts]
+sls-export = "agentic_sls.pipeline.export:main"
+sls-export-conversations = "agentic_sls.pipeline.export_conversations:main"
+sls-sync-reference = "agentic_sls.pipeline.sync_reference:main"
+sls-summarize-builds = "agentic_sls.pipeline.summarize_builds:main"
+sls-match-build-sessions = "agentic_sls.pipeline.match_build_sessions:main"
+sls-restore-builds = "agentic_sls.pipeline.restore_builds:main"
+sls-deliver-frames = "agentic_sls.pipeline.deliver_frames:main"
+sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

@@ -3,7 +3,7 @@ filename prefix) move out of shared dirs, and the move is idempotent."""
 
 import json
 
-from restore_builds import ERA_CUTOFF_MS, RENUMBER, move_frame_files, read_jsonl
+from agentic_sls.pipeline.restore_builds import ERA_CUTOFF_MS, RENUMBER, move_frame_files, read_jsonl
 
 
 OLD = "1780255220379_galvo.png"   # 2026-05-31, old era

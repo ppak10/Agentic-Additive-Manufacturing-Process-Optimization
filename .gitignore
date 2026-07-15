@@ -9,9 +9,9 @@ web/dist/
 # data/exports/ is the cross-repo contract surface: the sidecar CSVs
 # (build_to_inova_session.csv, sensors.csv) ship with the repo so sibling
 # HuggingFace dataset repos can read them via relative path; the parquet
-# and jsonl payloads stay out (regenerable via scripts/export.py).
+# and jsonl payloads stay out (regenerable via `uv run sls-export`).
 /data/frames/
-/data/postgres/
+/services/postgres/data/
 /data/exports/**/*.parquet
 /data/exports/**/*.jsonl
 

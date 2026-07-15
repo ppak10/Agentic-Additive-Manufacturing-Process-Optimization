@@ -3,7 +3,7 @@ connection, no Postgres needed."""
 
 import json
 
-from sync_reference import norm_date, sync_jobs, sync_specimens
+from agentic_sls.pipeline.sync_reference import norm_date, sync_jobs, sync_specimens
 
 
 class FakeConn:

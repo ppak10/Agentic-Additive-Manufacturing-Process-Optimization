@@ -1,0 +1,26 @@
+# Postgres (pgvector) — the recorder's working memory.
+#
+# Included by the root docker-compose.yml (compose `include:`). Relative
+# paths here resolve against THIS file's directory — the datadir lives
+# RIGHT HERE at services/postgres/data/ (relocated from data/postgres
+# 2026-07-15; each service folder owns its state). Moving it means moving
+# the live database; see wiki Operations for the docker/mount boot-race
+# incident before touching anything about this bind.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentic-sls-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-inova}
+      POSTGRES_USER: ${POSTGRES_USER:-inova}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inova}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inova} -d ${POSTGRES_DB:-inova}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

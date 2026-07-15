@@ -12,8 +12,8 @@
 # real leak is fixed.
 #
 # Usage:
-#   scripts/run-recorder.sh                # default 12GB heap
-#   HEAP_MB=16384 scripts/run-recorder.sh  # override
+#   server/scripts/run-recorder.sh                # default 12GB heap
+#   HEAP_MB=16384 server/scripts/run-recorder.sh  # override
 #
 # Distinguishes:
 #   exit 0                  → clean shutdown (SIGINT/SIGTERM) — supervisor stops
@@ -23,12 +23,14 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER_DIR="${SCRIPT_DIR}/../server"
+SERVER_DIR="${SCRIPT_DIR}/.."
 
 # Singleton guard: multiple supervisors mean multiple recorders fighting
 # over the port (the losers crash-loop forever). flock on a lockfile makes
 # a second invocation exit immediately instead.
-LOCKFILE="${SCRIPT_DIR}/../.run-recorder.lock"
+# Lock stays at the repo root so pre-move and post-move invocations
+# can never run concurrently.
+LOCKFILE="${SCRIPT_DIR}/../../.run-recorder.lock"
 exec 9>"${LOCKFILE}"
 if ! flock -n 9; then
     echo "run-recorder.sh is already running (lock held on ${LOCKFILE}) — exiting."

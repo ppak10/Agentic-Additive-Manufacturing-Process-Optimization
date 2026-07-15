@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "inova (recorder)",
+      "Group": "agentic-sls",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "inova",
+      "Username": "inova",
+      "SSLMode": "prefer"
+    }
+  }
+}

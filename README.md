@@ -17,7 +17,6 @@ definitions, column types, and indexes.
 | `position_hf`      | ~1 kHz             | plugin WebSocket `/movement/position/stream` (firmware-native rate)    |
 | `frames`           | ~5 Hz (chamber)    | recorder polling firmware HTTP endpoints; image bytes on disk          |
 | `events`           | sparse             | recorder, on state transitions                                         |
-| `plotter_commands` | per slicer command | plugin `LoggingCodePlotter` over WS `/plotter/commands/stream`         |
 
 Sample rates are configured in `.env` (`TELEMETRY_HZ`, `CAMERA_HZ`,
 `THERMAL_HZ`). `position_hf` is event-driven from the firmware and not
@@ -41,7 +40,8 @@ column points back to the file on disk.
 
 ### Flat-file exports
 
-`scripts/export.py` dumps the Postgres tables to flat files under
+`sls-export` (`agentic_sls/pipeline/export.py`) dumps the Postgres
+tables to flat files under
 `data/exports/` so downstream consumers can work without a running
 container. Layout:
 
@@ -50,7 +50,6 @@ data/exports/
   builds.jsonl
   events.jsonl                  (embedding column dropped)
   frames.jsonl                  (embedding column dropped)
-  plotter_commands.jsonl
   build_to_inova_session.csv    (sidecar; manual mapping to Inova-Mk1-Database)
   sensors.csv                   (sidecar; (sensor_id, kind) glossary)
   telemetry/{build_id}.parquet
@@ -63,10 +62,9 @@ By default only completed builds (`ended_at IS NOT NULL`) are exported;
 pass `--include-active` to also export the open build.
 
 ```sh
-python scripts/export.py
-python scripts/export.py --builds 1,2
-python scripts/export.py --out /tmp/exports --force
+uv run sls-export
+uv run sls-export --builds 1,2
+uv run sls-export --out /tmp/exports --force
 ```
 
-Dependencies (not yet wired into `pyproject.toml`): `psycopg[binary]`,
-`pyarrow`, `python-dotenv`.
+Dependencies come from the root `pyproject.toml` (`uv sync`).

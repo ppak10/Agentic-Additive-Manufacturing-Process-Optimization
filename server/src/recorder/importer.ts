@@ -15,7 +15,6 @@ import {
 } from "./spool.js";
 import { expand } from "./telemetry.js";
 import type { PositionFrame } from "./positionStream.js";
-import type { CommandFrame } from "./plotterStream.js";
 import type { FrameSpoolLine } from "./camera.js";
 
 // Post-print importer: replays the NVMe spool (see spool.ts) into Postgres.
@@ -65,15 +64,6 @@ const SPECS: Record<SpoolStream, StreamSpec> = {
       return [
         [buildId, new Date(f.respondedAt), f.data.x, f.data.y, f.data.z1, f.data.z2, f.data.r, f.data.hasHomed],
       ];
-    },
-  },
-  plotter: {
-    table: "plotter_commands",
-    columns: ["build_id", "ts", "layer_idx", "cmd_idx", "op", "x", "y", "laser", "speed", "raw"],
-    mapLine: (line, buildId) => {
-      const f = JSON.parse(line) as CommandFrame;
-      const d = f.data;
-      return [[buildId, new Date(d.ts), d.layer, d.idx, d.op, d.x, d.y, d.laser, d.speed, d.raw]];
     },
   },
   frames: {

@@ -212,6 +212,63 @@ export async function evaluateHealth(): Promise<HealthResult> {
   return result;
 }
 
+// Database connectivity + identity check. The identity part exists because
+// of the 2026-07-09 docker/mount boot race: docker initdb'd a fresh cluster
+// on the root fs and everything looked "connected" while the real database
+// sat hidden under the mountpoint. Table presence + build count is the
+// cheapest fingerprint that distinguishes the real cluster from a stale or
+// freshly-initdb'd one (see wiki Operations gotchas).
+export interface DbHealth {
+  connected: boolean;
+  latency_ms: number | null;
+  error?: string;
+  builds_count: number | null;
+  max_build: number | null;
+  last_event_ts: string | null;
+  has_agent_tables: boolean | null;
+  has_build_summaries: boolean | null;
+}
+
+async function evaluateDbHealth(): Promise<DbHealth> {
+  const started = Date.now();
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         (SELECT count(*)::int FROM builds)  AS builds_count,
+         (SELECT max(id)::int  FROM builds)  AS max_build,
+         (SELECT max(ts)       FROM events)  AS last_event_ts,
+         EXISTS (SELECT 1 FROM pg_tables
+                 WHERE schemaname = 'public'
+                   AND tablename = 'agent_conversations') AS has_agent_tables,
+         EXISTS (SELECT 1 FROM pg_tables
+                 WHERE schemaname = 'public'
+                   AND tablename = 'build_summaries')     AS has_build_summaries`,
+    );
+    const r = rows[0];
+    return {
+      connected: true,
+      latency_ms: Date.now() - started,
+      builds_count: r.builds_count,
+      max_build: r.max_build,
+      last_event_ts: r.last_event_ts ? new Date(r.last_event_ts).toISOString() : null,
+      has_agent_tables: r.has_agent_tables,
+      has_build_summaries: r.has_build_summaries,
+    };
+  } catch (err) {
+    return {
+      connected: false,
+      latency_ms: null,
+      error: err instanceof Error ? err.message : String(err),
+      builds_count: null,
+      max_build: null,
+      last_event_ts: null,
+      has_agent_tables: null,
+      has_build_summaries: null,
+    };
+  }
+}
+
 export function registerHealthRoutes(app: FastifyInstance): void {
   app.get("/api/health/recording", async () => evaluateHealth());
+  app.get("/api/health/db", async () => evaluateDbHealth());
 }

@@ -12,7 +12,6 @@ import type { FrameSpoolLine } from "../recorder/camera.js";
 import { getLatestSnapshot } from "../recorder/telemetry.js";
 import { getLatestPrintingStatus } from "../recorder/job.js";
 import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
-import { addPlotterSubscriber, removePlotterSubscriber } from "../recorder/plotterStream.js";
 import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
 import { currentMemorySample } from "../recorder/memory.js";
 import { registerHealthRoutes } from "./health.js";
@@ -62,7 +61,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   registerHealthRoutes(app);
 
   // Build registry + summaries + ASTM for the GUI Builds page (reads the
-  // knowledge tables created by scripts/sync_reference.py).
+  // knowledge tables created by sls-sync-reference).
   await registerKnowledgeRoutes(app);
 
   // Maintenance: ask the recorder to exit cleanly (code 0 — supervisor and
@@ -364,17 +363,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     addPositionSubscriber(send);
     client.on("close", () => removePositionSubscriber(send));
     client.on("error", () => removePositionSubscriber(send));
-  });
-
-  // Plotter command stream — same fan-out pattern as position. Frames flow
-  // from the LoggingCodePlotter decorator in the plugin.
-  app.get("/api/plotter/commands/stream", { websocket: true }, (client) => {
-    const send = (rawFrame: string) => {
-      if (client.readyState === 1) client.send(rawFrame);
-    };
-    addPlotterSubscriber(send);
-    client.on("close", () => removePlotterSubscriber(send));
-    client.on("error", () => removePlotterSubscriber(send));
   });
 
   // Plotter info + layer command backfill: plain HTTP proxies to the plugin.
@@ -738,29 +726,4 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
     pluginProxy("DELETE", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
   );
-
-  // Post-build / Postgres-backed command backfill. Serves the recorded log
-  // for a specific build+layer; used for replay and frame-to-command
-  // correlation analysis. Limit capped to keep response sizes bounded.
-  app.get<{
-    Params: { id: string };
-    Querystring: { layer?: string; sinceCmdIdx?: string; limit?: string };
-  }>("/api/builds/:id/plotter/commands", async (req, reply) => {
-    const buildId = Number.parseInt(req.params.id, 10);
-    const layer = Number.parseInt(req.query.layer ?? "0", 10);
-    const since = Number.parseInt(req.query.sinceCmdIdx ?? "0", 10);
-    const limit = Math.min(Number.parseInt(req.query.limit ?? "10000", 10), 50000);
-    if (!Number.isFinite(buildId) || !Number.isFinite(layer) || !Number.isFinite(since) || !Number.isFinite(limit)) {
-      return reply.code(400).send({ error: "bad query" });
-    }
-    const { rows } = await pool.query(
-      `SELECT ts, layer_idx, cmd_idx, op, x, y, laser, speed, raw
-         FROM plotter_commands
-        WHERE build_id = $1 AND layer_idx = $2 AND cmd_idx >= $3
-        ORDER BY cmd_idx ASC
-        LIMIT $4`,
-      [buildId, layer, since, limit],
-    );
-    return { buildId, layer, sinceCmdIdx: since, limit, commands: rows };
-  });
 }

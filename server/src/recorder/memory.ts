@@ -11,7 +11,7 @@ import type { FastifyBaseLogger } from "fastify";
 //
 // Guard is opt-in via RECORDER_MEMORY_GUARD=1. Rationale: under `tsx watch`
 // (the default dev workflow) there is no supervisor, so exiting just kills
-// the process. The `scripts/run-recorder.sh` wrapper sets the env var and
+// the process. The `server/scripts/run-recorder.sh` wrapper sets the env var and
 // handles restart.
 
 const SAMPLE_INTERVAL_MS = 30_000;

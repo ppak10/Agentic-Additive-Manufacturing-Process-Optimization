@@ -6,7 +6,6 @@ import { startJobDetector } from "./recorder/job.js";
 import { startCameraRecorder, startChamberRecorder } from "./recorder/camera.js";
 import { startBedMatrixRecorder } from "./recorder/bedmatrix.js";
 import { startPositionStreamRecorder } from "./recorder/positionStream.js";
-import { startPlotterStreamRecorder } from "./recorder/plotterStream.js";
 import { markShuttingDown } from "./recorder/state.js";
 import { startMemoryMonitor, MEMORY_GUARD_EXIT_CODE } from "./recorder/memory.js";
 import { closeAllSpools } from "./recorder/spool.js";
@@ -26,9 +25,8 @@ const start = async () => {
   startCameraRecorder(fastify.log);   // HTTP poll for thermal + galvo
   startBedMatrixRecorder(fastify.log);
   startPositionStreamRecorder(fastify.log);
-  startPlotterStreamRecorder(fastify.log);
   // Cleanly bail out when the heap crosses the soft threshold so an
-  // external supervisor (scripts/run-recorder.sh) can restart with a fresh
+  // external supervisor (server/scripts/run-recorder.sh) can restart with a fresh
   // heap. Distinct exit code so the supervisor can log "memory restart" vs
   // "clean shutdown" separately.
   startMemoryMonitor(fastify.log, () => shutdown("memory-guard"));

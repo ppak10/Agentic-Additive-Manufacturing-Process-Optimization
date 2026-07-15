@@ -7,7 +7,7 @@ export type RecordingState =
   | "PRINTER_UNREACHABLE"
   | "STARTING_UP";
 
-export type SpoolStream = "telemetry" | "position" | "plotter" | "frames";
+export type SpoolStream = "telemetry" | "position" | "frames";
 
 export interface SpoolStreamHealth {
   frame_lag_ms: number | null;

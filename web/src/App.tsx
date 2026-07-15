@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
+  Activity,
   Bot,
   Boxes,
   FlaskConical,
@@ -35,6 +36,7 @@ import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { Agents } from "@/pages/Agents";
+import { Services } from "@/pages/Services";
 import { AgentPanel } from "@/components/AgentPanel";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
 import { useJob, type JobStatus } from "@/hooks/useJob";
@@ -66,6 +68,12 @@ const NAV_GROUPS = [
     label: "Agents",
     items: [
       { to: "/agents", label: "Sessions", icon: Bot, end: false },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { to: "/services", label: "Services", icon: Activity, end: false },
     ],
   },
 ] as const;
@@ -185,6 +193,7 @@ function AppShell() {
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/agents" element={<Agents />} />
+            <Route path="/services" element={<Services />} />
           </Routes>
         </main>
       </SidebarInset>

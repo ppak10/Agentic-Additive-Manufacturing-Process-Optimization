@@ -14,8 +14,8 @@ Two modes:
                      builds.inova_session_id. Review the CSV first.
 
 Usage:
-  uv run scripts/match_build_sessions.py
-  uv run scripts/match_build_sessions.py --apply
+  uv run sls-match-build-sessions
+  uv run sls-match-build-sessions --apply
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 
 DEFAULT_SESSIONS_DIR = (
-    Path(__file__).resolve().parent.parent
+    Path(__file__).resolve().parent.parent.parent
     / "datasets/Inova-Mk1-Database/source/PrintSessions"
 )
 CSV_COLS = ["build_id", "inova_session_id", "notes"]

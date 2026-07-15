@@ -23,7 +23,7 @@ const STATE_STYLE: Record<ClientRecordingState, { bg: string; label: string; Ico
   ENDPOINT_UNREACHABLE: { bg: "bg-red-600 text-white animate-pulse", label: "RECORDER OFFLINE", Icon: WifiOff },
 };
 
-const STREAMS: SpoolStream[] = ["telemetry", "position", "plotter", "frames"];
+const STREAMS: SpoolStream[] = ["telemetry", "position", "frames"];
 
 function fmtLag(ms: number | null): string {
   if (ms == null) return "—";

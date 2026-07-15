@@ -19,9 +19,9 @@ build_summaries has no FK to builds on purpose: summaries for old-era builds
 are computed from parquet before the restore backfills their builds rows.
 
 Usage:
-  uv run scripts/summarize_builds.py                 # all parquet exports
-  uv run scripts/summarize_builds.py --builds 12,26
-  uv run scripts/summarize_builds.py --builds 44 --source postgres
+  uv run sls-summarize-builds                 # all parquet exports
+  uv run sls-summarize-builds --builds 12,26
+  uv run sls-summarize-builds --builds 44 --source postgres
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from match_build_sessions import (
+from agentic_sls.pipeline.match_build_sessions import (
     Session,
     apply,
     load_builds_jsonl,

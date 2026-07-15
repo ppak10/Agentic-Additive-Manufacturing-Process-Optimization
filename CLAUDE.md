@@ -17,9 +17,13 @@ plane / learning loop; the wiki also holds the topical reference pages).
   (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill.
 - `web/` — React/Vite dashboard (:5173): Builds registry pages, Agents
   session browser, right-docked agent chat panel.
-- `scripts/` — Python (uv): export.py, sync_reference.py,
-  summarize_builds.py, match_build_sessions.py, export_conversations.py.
+- `agentic_sls/pipeline/` — Python data pipeline (console scripts:
+  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|restore-builds>`).
 - `knowledge/` — curated reference corpus served by `reference_*` tools.
+- `services/` — docker compose service fragments (one folder per service:
+  postgres, pgadmin), pulled in by the root `docker-compose.yml` via
+  `include:`. The root file pins `name:` — don't change it (container
+  identity). Host-coupled processes stay systemd, infra goes here.
 - `deploy/systemd/` — user units: agentic-recorder, agentic-broker,
   agentic-web (`deploy/systemd/install.sh`).
 
@@ -40,7 +44,7 @@ Logs: `journalctl --user -u agentic-recorder -f`.
   (`inova_jobs/…profiles/…sessions`, `astm_specimens`), `build_registry`
   view, `build_summaries`, `agent_conversations/…sessions/…messages`,
   `agent_actions`. Reference tables are COPIES — fix data at its origin
-  repo and re-run `uv run scripts/sync_reference.py`.
+  repo and re-run `uv run sls-sync-reference`.
 - **HF dataset repos**: Inova-Mk1-{Telemetry,Database,ASTM,Conversations}
   are submodules under `datasets/` (Telemetry is 566 GB; all have
   `update = none` — NEVER blanket `--recurse-submodules`; init submodules
@@ -58,9 +62,9 @@ Logs: `journalctl --user -u agentic-recorder -f`.
 - Tests: `uv run pytest` (root) · `npm test` + `npm run typecheck` +
   `npx tsx tests/smoke.ts` (plugin/, needs DATABASE_URL exported).
 - Headless agent run: `npx tsx harness/run.ts <harness> --prompt '…'`.
-- Post-print refresh: export.py → summarize_builds.py → (new sessions?)
-  rsync `ppak@inova:/home/ppak/SLS4All/PrintSessions/` into
-  SLS4All-Backup + Database repo, then sync_reference.py.
+- Post-print refresh: `sls-export` → `sls-summarize-builds` →
+  (new sessions?) rsync `ppak@inova:/home/ppak/SLS4All/PrintSessions/`
+  into SLS4All-Backup + Database repo, then `sls-sync-reference`.
 
 ## Conventions & gotchas
 

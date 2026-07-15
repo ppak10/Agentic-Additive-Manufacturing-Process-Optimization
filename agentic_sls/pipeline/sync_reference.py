@@ -17,8 +17,8 @@ script is idempotent and deletions at the origin propagate. DDL lives here
 recorder never touches these tables.
 
 Usage:
-  uv run scripts/sync_reference.py
-  uv run scripts/sync_reference.py --database-repo ... --astm-repo ...
+  uv run sls-sync-reference
+  uv run sls-sync-reference --database-repo ... --astm-repo ...
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 
 # Database and ASTM live in-repo as submodules under datasets/.
-DATASETS_DIR = Path(__file__).resolve().parent.parent / "datasets"
+DATASETS_DIR = Path(__file__).resolve().parent.parent.parent / "datasets"
 
 DDL = """
 -- One row per .s4a archive = per print instance. The same firmware job

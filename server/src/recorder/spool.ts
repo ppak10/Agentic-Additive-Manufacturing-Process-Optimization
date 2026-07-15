@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { config } from "../config.js";
 
 // Append-only NDJSON spool on the NVMe. During a print the high-rate streams
-// (telemetry, position, plotter commands, frame metadata) are appended here
+// (telemetry, position, frame metadata) are appended here
 // instead of INSERTed into Postgres — the DB lives on a 5400rpm SMR disk that
 // cannot absorb fsync-heavy random writes while autovacuum runs, which is what
 // caused the RECORDING/NOT RECORDING flapping. After the build closes, the
@@ -16,12 +16,11 @@ import { config } from "../config.js";
 // own row-mapping code. A crash loses at most the last partial line (the
 // importer skips lines that fail to parse).
 
-export type SpoolStream = "telemetry" | "position" | "plotter" | "frames";
+export type SpoolStream = "telemetry" | "position" | "frames";
 
 export const SPOOL_STREAMS: readonly SpoolStream[] = [
   "telemetry",
   "position",
-  "plotter",
   "frames",
 ];
 
@@ -39,7 +38,6 @@ export interface SpoolStreamStats {
 const stats: Record<SpoolStream, SpoolStreamStats> = {
   telemetry: { lastFrameAt: null, lastAppendAt: null, lines: 0, lastError: null },
   position: { lastFrameAt: null, lastAppendAt: null, lines: 0, lastError: null },
-  plotter: { lastFrameAt: null, lastAppendAt: null, lines: 0, lastError: null },
   frames: { lastFrameAt: null, lastAppendAt: null, lines: 0, lastError: null },
 };
 

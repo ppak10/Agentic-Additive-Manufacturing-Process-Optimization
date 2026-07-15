@@ -11,8 +11,8 @@ Steps:
      rewriting frames.path prefixes. One transaction.
   2. Insert builds 1-41 metadata from builds.jsonl.
   3. COPY frames.jsonl and events.jsonl rows for builds ≤ 41 back into their
-     tables (42,43 skipped — already present via the renumber). The
-     plotter_commands export is empty; nothing to restore.
+     tables (42,43 skipped — already present via the renumber).
+     (plotter_commands existed at restore time, empty; table since dropped.)
   4. setval builds_id_seq → 46.
   5. Move July-era frame files out of shared dirs 1-5 into 42-46. Old and new
      eras separate cleanly on the epoch-ms filename prefix (May 31 stubs vs
@@ -26,9 +26,9 @@ STOP THE RECORDER FIRST and wait for any active print's spool import to
 finish. Dry run (default) is read-only and safe anytime.
 
 Usage:
-  uv run scripts/restore_builds.py               # dry run: plan + counts
-  uv run scripts/restore_builds.py --execute
-  uv run scripts/restore_builds.py --files-only  # redo step 5 after a crash
+  uv run sls-restore-builds               # dry run: plan + counts
+  uv run sls-restore-builds --execute
+  uv run sls-restore-builds --files-only  # redo step 5 after a crash
 """
 
 from __future__ import annotations
@@ -47,8 +47,7 @@ from dotenv import load_dotenv
 EXPORTS = Path("data/exports")
 FRAMES_DIR = Path("data/frames")
 RENUMBER = [(5, 46), (4, 45), (3, 44), (2, 43), (1, 42)]  # descending!
-CHILD_TABLES = ["telemetry", "position_hf", "frames", "events",
-                "plotter_commands"]
+CHILD_TABLES = ["telemetry", "position_hf", "frames", "events"]
 OLD_MAX = 41
 NEW_MAX = 46
 # Era cutoff for shared frame dirs 1-5: old-era files there are all from

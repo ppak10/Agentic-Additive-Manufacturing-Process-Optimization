@@ -1,18 +1,15 @@
-services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: agentic-sls-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-inova}
-      POSTGRES_USER: ${POSTGRES_USER:-inova}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inova}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inova} -d ${POSTGRES_DB:-inova}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+# Compose backbone — one service per folder under services/, pulled in via
+# `include:`. Run everything from the repo root: `docker compose up -d`.
+#
+# `name:` is pinned to the pre-include project name (it used to derive from
+# this directory's name) so existing containers keep their identity — do not
+# change it, or compose will want to recreate the live postgres container.
+#
+# Host-coupled processes (recorder, broker, web, agent harness CLIs) stay
+# systemd user units on purpose — see wiki Operations. Candidates that DO
+# belong here later: vLLM for the fine-tuned model, embedding services.
+name: agentic-additive-manufacturing-process-optimization
+
+include:
+  - services/postgres/compose.yml
+  - services/pgadmin/compose.yml

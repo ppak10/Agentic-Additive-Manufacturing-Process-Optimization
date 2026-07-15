@@ -5,8 +5,8 @@
 // live recorder (tsx watch), so wiring happens at a maintenance window with
 // the recorder stopped. Until then this module is inert.
 //
-// Depends on tables/views created by scripts/sync_reference.py and
-// scripts/summarize_builds.py; every handler degrades to a hint if the
+// Depends on tables/views created by sls-sync-reference and
+// sls-summarize-builds (agentic_sls/pipeline/); every handler degrades to a hint if the
 // sync hasn't run.
 import type { FastifyInstance } from "fastify";
 import { pool } from "../db/pool.js";
@@ -41,7 +41,7 @@ function isMissingRelation(err: unknown): boolean {
 }
 
 const SYNC_HINT =
-  "knowledge tables missing — run scripts/sync_reference.py and scripts/summarize_builds.py";
+  "knowledge tables missing — run sls-sync-reference and sls-summarize-builds";
 
 export async function registerKnowledgeRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/registry", async (_req, reply) => {

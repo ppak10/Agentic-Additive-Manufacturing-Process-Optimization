@@ -14,7 +14,7 @@ CREATE INDEX IF NOT EXISTS builds_started_at_idx ON builds (started_at DESC);
 -- Firmware PrintSession UUID for this build — the bridge between recorder
 -- build ids and the firmware's job/profile world (PrintSessions carry JobId
 -- and ProfileId). Backfilled for historical builds by
--- scripts/match_build_sessions.py; stamped live at print start once the
+-- agentic_sls/pipeline/match_build_sessions.py; stamped live at print start once the
 -- plugin exposes the active session.
 ALTER TABLE builds ADD COLUMN IF NOT EXISTS inova_session_id UUID;
 
@@ -64,29 +64,6 @@ CREATE TABLE IF NOT EXISTS position_hf (
   has_homed   BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS position_hf_build_ts_idx ON position_hf (build_id, ts DESC);
-
--- Every CodeCommand the slicer issues to ICodePlotter, captured by the
--- LoggingCodePlotter decorator in the plugin and streamed over the plugin's
--- WS /plotter/commands/stream. One row per command — recognized ops (MOVE_XY,
--- SET_LASER) have parsed args; everything else lands in `raw` for audit.
--- (build_id, layer_idx, cmd_idx) is not unique — a plugin restart mid-build
--- bumps buildEpoch and resets cmd_idx, producing benign overlap.
-CREATE TABLE IF NOT EXISTS plotter_commands (
-  build_id    BIGINT REFERENCES builds(id) ON DELETE CASCADE,
-  ts          TIMESTAMPTZ NOT NULL,
-  layer_idx   INT NOT NULL,
-  cmd_idx     INT NOT NULL,
-  op          TEXT NOT NULL,
-  x           REAL,
-  y           REAL,
-  laser       REAL,
-  speed       REAL,
-  raw         TEXT
-);
-CREATE INDEX IF NOT EXISTS plotter_commands_build_layer_idx
-  ON plotter_commands (build_id, layer_idx, cmd_idx);
-CREATE INDEX IF NOT EXISTS plotter_commands_build_ts_idx
-  ON plotter_commands (build_id, ts DESC);
 
 -- Health of the recording pipeline, as classified by /api/health/recording.
 -- One row inserted on every state transition (RECORDING → PRINTING_NOT_RECORDING,

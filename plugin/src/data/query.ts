@@ -27,7 +27,7 @@ const SCHEMA_HINT = `Key tables/views:
                          job_id, job_name, profile_id, profile_name, exception
   telemetry              build_id, ts, sensor_id, kind, value (10 Hz skinny;
                          new-era builds only — old era lives in parquet exports)
-  events, frames, position_hf, plotter_commands, recording_health_events`;
+  events, frames, position_hf, recording_health_events`;
 
 // First gate for db_query; the read-only pool is the backstop. Exported for
 // tests. Throws on anything that isn't a single SELECT/WITH statement and

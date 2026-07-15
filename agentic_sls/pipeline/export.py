@@ -4,7 +4,6 @@ Output layout under --out (default: data/exports/):
   builds.jsonl
   events.jsonl                  (embedding column dropped)
   frames.jsonl                  (embedding column dropped)
-  plotter_commands.jsonl
   build_to_inova_session.csv    (sidecar; preserves filled UUIDs across runs)
   sensors.csv                   (sidecar; preserves filled unit/description across runs)
   telemetry/{build_id}.parquet
@@ -20,9 +19,9 @@ will keep changing across runs). An explicit --builds list overrides the
 active filter — IDs the user names by hand are always exported.
 
 Usage:
-  python scripts/export.py
-  python scripts/export.py --builds 1,2
-  python scripts/export.py --out /tmp/exports --force
+  uv run sls-export
+  uv run sls-export --builds 1,2
+  uv run sls-export --out /tmp/exports --force
 """
 
 from __future__ import annotations
@@ -121,18 +120,6 @@ def export_frames(conn, out: Path, build_ids: list[int] | None) -> int:
     with conn.cursor() as cur:
         cur.execute(sql, args)
         return _write_jsonl(_rows_as_dicts(cur), out / "frames.jsonl")
-
-
-def export_plotter_commands(conn, out: Path, build_ids: list[int] | None) -> int:
-    sql, args = _maybe_where_build(
-        "SELECT build_id, ts, layer_idx, cmd_idx, op, x, y, laser, speed, raw "
-        "FROM plotter_commands",
-        [], build_ids,
-    )
-    sql += " ORDER BY build_id, ts"
-    with conn.cursor() as cur:
-        cur.execute(sql, args)
-        return _write_jsonl(_rows_as_dicts(cur), out / "plotter_commands.jsonl")
 
 
 # ---------- parquet per-build exports ----------
@@ -360,12 +347,6 @@ def main() -> int:
         print(f"  events.jsonl: {n} rows")
         n = export_frames(conn, out, explicit)
         print(f"  frames.jsonl: {n} rows")
-        if _table_exists(conn, "plotter_commands"):
-            n = export_plotter_commands(conn, out, explicit)
-            print(f"  plotter_commands.jsonl: {n} rows")
-        else:
-            print("  plotter_commands.jsonl: skipped (table not in DB; "
-                  "migration not yet applied)")
 
         for bid in targets:
             n = export_telemetry_for_build(conn, out, bid, args.force)

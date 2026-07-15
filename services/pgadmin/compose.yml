@@ -1,0 +1,27 @@
+# pgAdmin — browser UI for the recorder database (http://<host>:5050).
+#
+# State lives in a named volume rather than a ./data bind: the pgadmin
+# process runs as uid 5050 and a bind mount would need a sudo chown; its
+# state (UI prefs, saved server defs) is disposable anyway — the server
+# connection below is re-seeded from servers.json on a fresh volume.
+services:
+  pgadmin:
+    image: dpage/pgadmin4:9
+    container_name: agentic-sls-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-inova}
+      # LAN-only deployment, same trust stance as the rest of the stack.
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgadmin-data:

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import polars as pl
 import pytest
 
-from summarize_builds import summarize
+from agentic_sls.pipeline.summarize_builds import summarize
 
 
 T0 = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
