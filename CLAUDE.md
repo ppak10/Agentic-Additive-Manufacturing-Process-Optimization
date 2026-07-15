@@ -40,13 +40,14 @@ Logs: `journalctl --user -u agentic-recorder -f`.
   view, `build_summaries`, `agent_conversations/…sessions/…messages`,
   `agent_actions`. Reference tables are COPIES — fix data at its origin
   repo and re-run `uv run scripts/sync_reference.py`.
-- **HF dataset repos**: Inova-Mk1-{Telemetry,Database,ASTM} are
-  submodules under `datasets/` (Telemetry is 566 GB; all three have
+- **HF dataset repos**: Inova-Mk1-{Telemetry,Database,ASTM,Conversations}
+  are submodules under `datasets/` (Telemetry is 566 GB; all have
   `update = none` — NEVER blanket `--recurse-submodules`; init submodules
-  explicitly). Inova-Mk1-Conversations remains a sibling under
-  `/mnt/storage2/HuggingFace/Datasets/`. All read from `data/exports/`
-  by relative path. Raw agent transcripts write DIRECTLY into
-  Inova-Mk1-Conversations/source/sessions (commit that repo often).
+  explicitly; hf.co remotes need the HF SSH key). All read from
+  `data/exports/` by relative path. Raw agent transcripts write DIRECTLY
+  into datasets/Inova-Mk1-Conversations/source/sessions (commit that repo
+  often). Conversations' HF remote name typo ("Coversations") is known —
+  don't fix it.
 - Old-era (pre-2026-07-13-restore) raw telemetry lives only in
   `data/exports/telemetry/*.parquet`, not Postgres — summarize from
   parquet, never `--source postgres` for big builds (fetch too slow).

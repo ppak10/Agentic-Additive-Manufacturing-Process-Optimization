@@ -22,3 +22,7 @@
 	path = datasets/Inova-Mk1-ASTM
 	url = git@hf.co:datasets/ppak10/Inova-Mk1-ASTM
 	update = none
+[submodule "datasets/Inova-Mk1-Conversations"]
+	path = datasets/Inova-Mk1-Conversations
+	url = git@hf.co:datasets/ppak10/Inova-Mk1-Coversations
+	update = none

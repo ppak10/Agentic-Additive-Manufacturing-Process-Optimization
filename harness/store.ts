@@ -20,11 +20,11 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Where raw transcripts live. Preferred home is the Inova-Mk1-Conversations
 // dataset repo's source/sessions/ (written directly — the dataset repo is
 // the archive; commit it often, since until pushed the working tree is the
-// only copy). AGENT_SESSIONS_DIR overrides; falls back to the repo-local
-// data/sessions/ when the dataset checkout is absent (fresh machine, CI).
+// only copy). The dataset is a submodule at datasets/Inova-Mk1-Conversations.
+// AGENT_SESSIONS_DIR overrides; falls back to the repo-local data/sessions/
+// when the submodule checkout is absent (fresh machine, CI).
 const DATASET_SESSIONS = path.resolve(
-  REPO, "..", "..", "HuggingFace", "Datasets", "Inova-Mk1-Conversations",
-  "source", "sessions",
+  REPO, "datasets", "Inova-Mk1-Conversations", "source", "sessions",
 );
 
 export function sessionsRoot(): string {
