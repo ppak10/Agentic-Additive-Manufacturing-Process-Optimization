@@ -1,9 +1,10 @@
 /**
  * agentic-sls plugin for opencode.
  *
- * Mirrors the Claude Code plugin (.claude-plugin/plugin.json):
- *   - Registers the `agentic-sls` MCP server (uv + agentic_sls.mcp)
- *   - Exposes the bundled skills/ directory so opencode discovers SKILL.md files
+ * Registers the `agentic-sls` MCP server (TypeScript, plugin/) and exposes
+ * the plugin's skills/ directory so opencode discovers SKILL.md files.
+ * (The legacy May-era Python MCP and its root skills/ were retired
+ * 2026-07-15.)
  */
 
 import path from 'node:path';
@@ -26,13 +27,10 @@ interface PluginHooks {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
 const skillsDirs = [
-  path.join(repoRoot, 'skills'),
   path.join(repoRoot, 'plugin', 'skills'),
 ];
 
-export const AgenticSlsPlugin = async ({ directory }: PluginContext): Promise<PluginHooks> => {
-  const projectDir = directory ?? process.cwd();
-
+export const AgenticSlsPlugin = async (_ctx: PluginContext): Promise<PluginHooks> => {
   return {
     config: async (config) => {
       config.mcp ??= {};
@@ -43,17 +41,6 @@ export const AgenticSlsPlugin = async ({ directory }: PluginContext): Promise<Pl
         type: 'local',
         command: ['node', path.join(repoRoot, 'plugin', 'scripts', 'launch.cjs')],
         enabled: true,
-      };
-
-      // Legacy Python server: /api/status polling + chamber camera capture
-      // against the firmware's port-80 API.
-      config.mcp['agentic-sls-py'] = {
-        type: 'local',
-        command: ['uv', '--directory', repoRoot, 'run', '-m', 'agentic_sls.mcp'],
-        environment: {
-          PYTHONPATH: repoRoot,
-          AGENTIC_SLS_PROJECT_DIR: projectDir,
-        },
       };
 
       config.skills ??= {};

@@ -19,7 +19,10 @@ plane / learning loop; the wiki also holds the topical reference pages).
   session browser, right-docked agent chat panel.
 - `agentic_sls/pipeline/` — Python data pipeline (console scripts:
   `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|restore-builds>`).
-- `knowledge/` — curated reference corpus served by `reference_*` tools.
+- `datasets/SLS-Knowledge/` — curated reference corpus served by
+  `reference_*` tools (its `source/`). Published HF dataset; the submodule
+  pin records which corpus version agents saw. MUST stay initialized
+  (unlike the big datasets, no `update = none`).
 - `services/` — docker compose service fragments (one folder per service:
   postgres, pgadmin), pulled in by the root `docker-compose.yml` via
   `include:`. The root file pins `name:` — don't change it (container

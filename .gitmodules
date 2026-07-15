@@ -26,3 +26,6 @@
 [submodule "Agentic-Additive-Manufacturing-Process-Optimization.wiki"]
 	path = wiki
 	url = git@github.com:ppak10/Agentic-Additive-Manufacturing-Process-Optimization.wiki.git
+[submodule "datasets/SLS-Knowledge"]
+	path = datasets/SLS-Knowledge
+	url = git@hf.co:datasets/ppak10/SLS-Knowledge

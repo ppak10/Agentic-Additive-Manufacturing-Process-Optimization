@@ -234,8 +234,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Inova build monitoring data
-builds/
 /data/sessions/
 .run-recorder.lock
 web/tsconfig.tsbuildinfo

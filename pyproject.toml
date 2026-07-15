@@ -5,12 +5,10 @@ description = "Agentic process optimization for selective laser sintering (SLS) 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.12.3",
     "polars>=1.42.1",
     "psycopg[binary]>=3.3.4",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
-    "requests>=2.32",
 ]
 
 [project.urls]
