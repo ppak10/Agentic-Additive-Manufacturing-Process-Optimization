@@ -2,7 +2,8 @@
 
 Agentic process optimization for an SLS4All Inova MK1 SLS printer. Thesis:
 compare agent harnesses/models operating the same MCP tool surface. Full
-design: `docs/architecture.md` (data plane / agent plane / learning loop).
+design: `wiki/Architecture.md` in the `wiki/` submodule (data plane / agent
+plane / learning loop; the wiki also holds the topical reference pages).
 
 ## Layout
 
