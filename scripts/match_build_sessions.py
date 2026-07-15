@@ -34,8 +34,9 @@ import psycopg
 from dotenv import load_dotenv
 
 
-DEFAULT_SESSIONS_DIR = Path(
-    "/mnt/storage2/HuggingFace/Datasets/Inova-Mk1-Database/source/PrintSessions"
+DEFAULT_SESSIONS_DIR = (
+    Path(__file__).resolve().parent.parent
+    / "datasets/Inova-Mk1-Database/source/PrintSessions"
 )
 CSV_COLS = ["build_id", "inova_session_id", "notes"]
 

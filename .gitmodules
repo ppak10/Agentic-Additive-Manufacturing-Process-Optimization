@@ -14,3 +14,11 @@
 	path = datasets/Inova-Mk1-Telemetry
 	url = git@hf.co:datasets/ppak10/Inova-Mk1-Telemetry
 	update = none
+[submodule "datasets/Inova-Mk1-Database"]
+	path = datasets/Inova-Mk1-Database
+	url = git@hf.co:datasets/ppak10/Inova-Mk1-Database
+	update = none
+[submodule "datasets/Inova-Mk1-ASTM"]
+	path = datasets/Inova-Mk1-ASTM
+	url = git@hf.co:datasets/ppak10/Inova-Mk1-ASTM
+	update = none

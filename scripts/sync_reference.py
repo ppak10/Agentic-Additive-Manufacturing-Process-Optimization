@@ -34,7 +34,8 @@ from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 
-HF_DATASETS = Path("/mnt/storage2/HuggingFace/Datasets")
+# Database and ASTM live in-repo as submodules under datasets/.
+DATASETS_DIR = Path(__file__).resolve().parent.parent / "datasets"
 
 DDL = """
 -- One row per .s4a archive = per print instance. The same firmware job
@@ -227,9 +228,9 @@ def main() -> int:
         description="Sync reference data (jobs/profiles/sessions/ASTM) into "
                     "Postgres.")
     ap.add_argument("--database-repo", type=Path,
-                    default=HF_DATASETS / "Inova-Mk1-Database")
+                    default=DATASETS_DIR / "Inova-Mk1-Database")
     ap.add_argument("--astm-repo", type=Path,
-                    default=HF_DATASETS / "Inova-Mk1-ASTM")
+                    default=DATASETS_DIR / "Inova-Mk1-ASTM")
     args = ap.parse_args()
 
     for repo in [args.database_repo, args.astm_repo]:
