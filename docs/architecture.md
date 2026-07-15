@@ -16,10 +16,12 @@ data. Status: **phases 1–3 deployed and verified (2026-07-13)**; phase 4
   of documents. Filterable tools whose schemas teach the agent what exists
   beat vector search at this scale. pgvector columns (`events.embedding`,
   `frames.embedding`) stay reserved for phase 5.
-- **The HF repos are the publication layer.** Four sibling datasets:
-  `Inova-Mk1-{Telemetry,Database,ASTM,Conversations}`. Downstream of
-  Postgres (or of their own lab/firmware sources), never the agent's query
-  surface. Raw agent transcripts write DIRECTLY into the Conversations
+- **The HF repos are the publication layer.** Four datasets:
+  `Inova-Mk1-{Telemetry,Database,ASTM,Conversations}` — Telemetry is a
+  submodule at `datasets/Inova-Mk1-Telemetry` (566 GB, `update = none`),
+  the rest are siblings under `/mnt/storage2/HuggingFace/Datasets/`.
+  Downstream of Postgres (or of their own lab/firmware sources), never
+  the agent's query surface. Raw agent transcripts write DIRECTLY into the Conversations
   repo's `source/sessions/` (it is the archive; commit it often).
 - **Learning lives in the data layer, not model weights.** Action history,
   conversations, playbook, and the GP surrogate grow with each build; any

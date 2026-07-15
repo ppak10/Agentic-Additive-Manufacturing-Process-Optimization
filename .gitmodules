@@ -10,3 +10,7 @@
 [submodule "sls4all/Inova-Defect-Detection-Model"]
 	path = sls4all/Inova-Defect-Detection-Model
 	url = git@github.com:ppak10/Inova-Defect-Detection-Model.git
+[submodule "datasets/Inova-Mk1-Telemetry"]
+	path = datasets/Inova-Mk1-Telemetry
+	url = git@hf.co:datasets/ppak10/Inova-Mk1-Telemetry
+	update = none
