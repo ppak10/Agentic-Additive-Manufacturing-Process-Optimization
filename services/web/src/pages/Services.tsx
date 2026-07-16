@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   AlertOctagon,
   Bot,
@@ -7,6 +7,7 @@ import {
   Database,
   HelpCircle,
   Radio,
+  RefreshCw,
   WifiOff,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -87,6 +88,83 @@ function fmtAgo(iso: string | null): string {
 
 function probeTone(p: ServiceProbe<unknown>): Tone {
   return p.status === "up" ? "up" : p.status === "down" ? "down" : "unknown";
+}
+
+interface HarnessStatus {
+  harness: string;
+  installed: boolean;
+  version: string | null;
+  lastSession: { started_at: string; exit_code: number | null; model: string | null } | null;
+  loginHint: string;
+}
+
+// Auth panel v1: status probe + guided login commands. v2 (designed, not
+// built): pty relay that captures each CLI's paste-URL OAuth flow into the
+// GUI and stores credentials in a broker-home volume.
+function HarnessAuthCard() {
+  const [rows, setRows] = useState<HarnessStatus[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/agent/harness/status");
+      if (r.ok) setRows(await r.json());
+    } catch { /* broker down — the broker card above says so */ }
+    setBusy(false);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Bot className="size-4" />
+          <span>Harness auth</span>
+          <span className="font-mono text-[10px] opacity-50">pinned in broker image</span>
+          <button
+            onClick={() => void load()}
+            className="ml-auto text-xs underline opacity-70 hover:opacity-100 flex items-center gap-1"
+            disabled={busy}
+          >
+            <RefreshCw className={cn("size-3", busy && "animate-spin")} /> recheck
+          </button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!rows ? (
+          <p className="text-xs opacity-60">probing…</p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="text-left opacity-60">
+              <tr><th className="py-1">harness</th><th>version</th><th>last session</th><th>login (docker exec)</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const ok = r.lastSession?.exit_code === 0;
+                return (
+                  <tr key={r.harness} className="border-t border-border/30 align-top">
+                    <td className="py-1 pr-2 font-heading">{r.harness}</td>
+                    <td className="pr-2 font-mono">{r.installed ? r.version : <span className="text-red-600 font-bold">NOT INSTALLED</span>}</td>
+                    <td className="pr-2">
+                      {r.lastSession ? (
+                        <span className={cn(ok ? "text-green-700" : "text-red-600")}>
+                          {ok ? "ok" : `exit ${r.lastSession.exit_code}`} · {new Date(r.lastSession.started_at).toLocaleString()}
+                          {r.lastSession.model ? ` · ${r.lastSession.model}` : ""}
+                        </span>
+                      ) : (
+                        <span className="opacity-40">never ran</span>
+                      )}
+                    </td>
+                    <td className="font-mono text-[10px] opacity-70 break-all">{r.loginHint}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function Services() {
@@ -237,6 +315,7 @@ export function Services() {
           )}
         </ServiceCard>
       </div>
+      <HarnessAuthCard />
       <p className="text-[10px] font-mono opacity-40">
         probed {new Date(health.checkedAt).toLocaleTimeString()} · every 4s · dashboard (agentic-web · :5173) is up if
         you can read this

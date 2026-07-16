@@ -38,7 +38,7 @@ import {
   sessionsRoot,
 } from "./store.js";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLUGINS_ROOT = path.join(REPO, "services", "plugins");
 const PORT = Number(process.env.AGENT_BROKER_PORT ?? 3100);
 
@@ -162,6 +162,9 @@ function buildCmd(chat: Chat, message: string): string[] {
         message,
         ...(resume ? ["--session", resume] : []),
         "--print-logs",
+        // Explicit model required — zen default errors upstream (2026-07-16)
+        "--model",
+        process.env.OPENCODE_MODEL ?? "opencode/deepseek-v4-flash-free",
       ];
     case "agy":
       return [
@@ -287,6 +290,56 @@ app.get("/agent/health", async () => ({
   chats: chats.size,
   db: !!pool,
 }));
+
+// ---------------------------------------------------------------------------
+// Harness status: the auth panel's probe. Reports per-CLI binary version
+// (pinned in the broker image) + the last recorded session outcome from
+// agent_sessions (the honest "is this harness working" signal) + the guided
+// login command for OAuth flows (v1: run via docker exec; a pty relay that
+// captures the paste-URL flow into the GUI is the planned v2).
+
+const HARNESSES: Harness[] = ["claude", "opencode", "codex", "agy"];
+
+const LOGIN_HINTS: Record<Harness, string> = {
+  claude: "docker exec -it agentic-sls-broker claude /login",
+  opencode: "docker exec -it agentic-sls-broker opencode auth login",
+  codex: "docker exec -it agentic-sls-broker codex login",
+  agy: "docker exec -it agentic-sls-broker agy login",
+};
+
+function cliVersion(cmd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const t = setTimeout(() => { child.kill("SIGKILL"); resolve(null); }, 5000);
+    child.stdout.on("data", (d) => { out += d; });
+    child.on("error", () => { clearTimeout(t); resolve(null); });
+    child.on("close", (code) => {
+      clearTimeout(t);
+      resolve(code === 0 ? out.trim().split("\n")[0].slice(0, 60) : null);
+    });
+  });
+}
+
+app.get("/agent/harness/status", async () => {
+  const versions = await Promise.all(HARNESSES.map((h) => cliVersion(h)));
+  let last: Record<string, { started_at: string; exit_code: number | null; model: string | null }> = {};
+  if (pool) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (harness) harness, started_at, exit_code, model
+         FROM agent_sessions ORDER BY harness, started_at DESC`);
+      last = Object.fromEntries(rows.map((r) => [r.harness, r]));
+    } catch { /* table may not exist yet */ }
+  }
+  return HARNESSES.map((h, i) => ({
+    harness: h,
+    installed: versions[i] !== null,
+    version: versions[i],
+    lastSession: last[h] ?? null,
+    loginHint: LOGIN_HINTS[h],
+  }));
+});
 
 app.post<{ Body: { harness: Harness; preset?: Preset } }>(
   "/agent/chats",

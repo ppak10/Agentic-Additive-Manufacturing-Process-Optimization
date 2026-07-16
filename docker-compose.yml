@@ -15,3 +15,5 @@ include:
   - services/postgres/compose.yml
   - services/pgadmin/compose.yml
   - services/web/compose.yml
+  - services/harness/compose.yml
+  - services/recorder/compose.yml

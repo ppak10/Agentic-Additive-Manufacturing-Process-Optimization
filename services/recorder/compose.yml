@@ -1,0 +1,33 @@
+# Fastify recorder (:3000) — the LAST service to leave systemd (2026-07-16).
+# Mirrors the retired agentic-recorder unit exactly:
+#   - working_dir = <repo>/server, command = tsx src/index.ts (NO watch —
+#     source edits must never hot-reload a mid-print recorder)
+#   - restart: on-failure — crashes and the memory guard's exit 101 restart;
+#     a CLEAN exit (SIGTERM / stop-after-build) leaves it STOPPED. Do not
+#     change to unless-stopped: that would resurrect deliberate stops.
+#   - 12 GB heap + in-process memory guard (exits 101 before the ceiling)
+# THE RULE STILL RULES: never `docker compose restart recorder` (or any
+# compose operation that recreates it) while a print is being recorded —
+# check /api/health/recording; use POST /api/admin/stop-after-build.
+services:
+  recorder:
+    image: node:22-bookworm
+    container_name: agentic-sls-recorder
+    restart: on-failure
+    network_mode: host
+    user: "1000:1000"
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/server
+    command: ["../node_modules/.bin/tsx", "src/index.ts"]
+    environment:
+      HOME: /home/node
+      NODE_OPTIONS: --max-old-space-size=12288
+      RECORDER_MEMORY_GUARD: "1"
+    volumes:
+      - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      - /home/ppak/.agentic-sls:/home/ppak/.agentic-sls
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/healthz >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

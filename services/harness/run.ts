@@ -29,7 +29,7 @@ import {
   sessionsRoot,
 } from "./store.js";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Harness project root: the CLIs run with services/plugins/ as cwd so each
 // harness's native project discovery (.mcp.json, .claude-plugin,
 // .opencode/, gemini-extension.json) anchors on the plugin surface, not
@@ -133,12 +133,15 @@ const DRIVERS: Record<string, Driver> = {
   },
 
   opencode: {
+    // opencode MUST get an explicit model: its free zen default errors
+    // upstream (2026-07-16) and thesis rows need the model recorded anyway.
     cmd: (prompt, model) => [
       "opencode",
       "run",
       prompt,
       "--print-logs",
-      ...(model ? ["--model", model] : []),
+      "--model",
+      model ?? process.env.OPENCODE_MODEL ?? "opencode/deepseek-v4-flash-free",
     ],
     parse: (stdout) => {
       const s = emptyStats();

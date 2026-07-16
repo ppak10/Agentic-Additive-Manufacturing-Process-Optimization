@@ -19,7 +19,7 @@ import {
   parseTranscript,
 } from "./store.js";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const envFile = path.join(REPO, ".env");
 if (existsSync(envFile)) {

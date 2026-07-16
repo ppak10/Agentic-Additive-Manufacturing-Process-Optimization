@@ -16,7 +16,7 @@ plane / learning loop; the wiki also holds the topical reference pages).
   server (npm `@ppak10/agentic-sls-mcp`): 7 printer-control + 7 knowledge
   tools, identical for all four harnesses (Claude Code, OpenCode, Codex,
   Antigravity `agy`). Ground rules: `services/plugins/AGENTS.md`.
-- `harness/` — uniform headless driver (`run.ts`), chat broker
+- `services/harness/` — uniform headless driver (`run.ts`), chat broker
   (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill.
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
   mode + HMR): Builds registry pages, Agents session browser, right-docked
@@ -32,19 +32,19 @@ plane / learning loop; the wiki also holds the topical reference pages).
   code where applicable), pulled in by the root `docker-compose.yml` via
   `include:`. The root file pins `name:` — don't change it (container
   identity). Host-coupled processes stay systemd, infra goes here.
-- `deploy/systemd/` — user units: agentic-recorder, agentic-broker,
-  agentic-web (`deploy/systemd/install.sh`).
 
 ## Services — IMPORTANT
 
-The recorder and broker run as **systemd user units without tsx watch**:
-editing `server/src` or `harness/` does NOT hot-reload. The dashboard runs
-in docker compose (`agentic-sls-web`, vite dev — web edits DO hot-reload).
-Deploy = `systemctl --user restart agentic-<recorder|broker>` at a
-safe moment — **never restart the recorder while a print is being
-recorded** (check `/api/health/recording`; use
-`POST /api/admin/stop-after-build` for graceful maintenance windows).
-Logs: `journalctl --user -u agentic-recorder -f`.
+EVERYTHING runs in docker compose (2026-07-16; systemd fully retired):
+postgres, pgadmin, web (hot-reloads), broker (`agentic-sls-broker` — the
+four harness CLIs PINNED in its image, bumps = deliberate Dockerfile
+commits, auth bind-mounted from host home), recorder
+(`agentic-sls-recorder`, `restart: on-failure` so a clean
+stop-after-build exit STAYS stopped). server/harness edits deploy via
+`docker compose restart <recorder|broker>` at a safe moment — **never
+restart or recreate the recorder while a print is being recorded**
+(check `/api/health/recording`; use `POST /api/admin/stop-after-build`).
+Logs: `docker logs -f agentic-sls-recorder`.
 
 ## Data
 
@@ -91,7 +91,9 @@ Logs: `journalctl --user -u agentic-recorder -f`.
   behavior, not something to bypass.
 - codex exec needs `--dangerously-bypass-approvals-and-sandbox` for MCP
   (openai/codex#16685); agy reads MCP config ONLY from
-  `~/.gemini/config/mcp_config.json`; analyst-preset chats deny Claude's
+  `~/.gemini/config/mcp_config.json`; opencode resolves the project root
+  via git toplevel (root `.opencode/` shim registers the MCP server) and
+  MUST get an explicit `--model` (its free zen default errors upstream); analyst-preset chats deny Claude's
   Bash/Edit/Write (built-ins aren't restricted by `--allowedTools`);
   harness CLIs run with cwd=services/plugins/ (re-register Claude's
   plugin marketplace from that path after moves).

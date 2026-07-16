@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // Where raw transcripts live. Preferred home is the Agentic-SLS-Conversations
 // dataset repo's source/sessions/ (written directly — the dataset repo is
