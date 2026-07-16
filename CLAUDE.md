@@ -70,7 +70,8 @@ Logs: `journalctl --user -u agentic-recorder -f`.
 - Headless agent run: `npx tsx harness/run.ts <harness> --prompt '…'`.
 - Post-print refresh: `sls-export` → `sls-summarize-builds` →
   (new sessions?) rsync `ppak@inova:/home/ppak/SLS4All/PrintSessions/`
-  into SLS4All-Backup + Database repo, then `sls-sync-reference`.
+  into `sls4all/SLS4All-Backup` (submodule, 10 GB, `update = none`) +
+  Database repo, then `sls-sync-reference`.
 
 ## Conventions & gotchas
 
