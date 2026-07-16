@@ -3,7 +3,7 @@ import { z } from "zod";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 
-loadEnv({ path: resolve(process.cwd(), "../.env") });
+loadEnv({ path: resolve(process.cwd(), "../../.env") });
 loadEnv();
 
 const schema = z.object({

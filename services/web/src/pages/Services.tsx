@@ -197,7 +197,7 @@ export function Services() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <ServiceCard
           title="Recorder"
-          subtitle="agentic-recorder · :3000"
+          subtitle="agentic-sls-recorder · :3000"
           icon={Radio}
           tone={probeTone(recorder)}
           toneLabel={recorder.status === "up" ? rec?.overall : undefined}

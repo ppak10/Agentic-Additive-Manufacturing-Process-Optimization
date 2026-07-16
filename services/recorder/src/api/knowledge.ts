@@ -6,12 +6,12 @@
 // the recorder stopped. Until then this module is inert.
 //
 // Depends on tables/views created by sls-sync-reference and
-// sls-summarize-builds (agentic_sls/pipeline/); every handler degrades to a hint if the
+// sls-summarize-builds (services/pipeline/); every handler degrades to a hint if the
 // sync hasn't run.
 import type { FastifyInstance } from "fastify";
 import { pool } from "../db/pool.js";
 
-// Mirrors PROFILE_KEY_PARAMS in plugin/src/data/builds.ts — the profile
+// Mirrors PROFILE_KEY_PARAMS in services/plugins/mcp/src/data/builds.ts — the profile
 // fields worth showing when comparing builds.
 const PROFILE_KEY_PARAMS = [
   "Material",

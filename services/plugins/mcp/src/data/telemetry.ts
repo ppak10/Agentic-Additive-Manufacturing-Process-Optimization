@@ -4,7 +4,7 @@ import { query } from "../db.js";
 import { errorResult, jsonResult } from "../result.js";
 
 // Per-build telemetry detail from build_summaries: the derived features
-// (agentic_sls/pipeline/summarize_builds.py), not raw 10 Hz ticks. Raw ticks live in the
+// (services/pipeline/agentic_sls/pipeline/summarize_builds.py), not raw 10 Hz ticks. Raw ticks live in the
 // telemetry table (new era) / export parquets (old era) if db_query-level
 // digging is ever needed.
 

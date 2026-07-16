@@ -14,7 +14,7 @@
     "rootDir": "src",
     "baseUrl": ".",
     "paths": {
-      "@inova/client": ["../sls4all/Inova-API-Plugin/client/typescript/src/client.ts"]
+      "@inova/client": ["../../sls4all/Inova-API-Plugin/client/typescript/src/client.ts"]
     }
   },
   "include": ["src"]

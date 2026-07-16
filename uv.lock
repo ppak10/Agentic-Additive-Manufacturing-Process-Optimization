@@ -2,10 +2,15 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "agentic-sls",
+]
+
 [[package]]
 name = "agentic-sls"
 version = "0.0.1"
-source = { editable = "." }
+source = { editable = "services/pipeline" }
 dependencies = [
     { name = "polars" },
     { name = "psycopg", extra = ["binary"] },

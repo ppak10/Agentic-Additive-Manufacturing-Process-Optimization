@@ -1,0 +1,14 @@
+{
+  "name": "agentic-sls-harness",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Harness runner (run.ts), chat broker (server.ts), conversation store",
+  "dependencies": {
+    "fastify": "^4.28.1",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
+  }
+}

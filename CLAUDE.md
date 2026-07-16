@@ -7,8 +7,9 @@ plane / learning loop; the wiki also holds the topical reference pages).
 
 ## Layout
 
-- `server/` — Fastify recorder (:3000): telemetry/frames/position → NVMe
-  spool → Postgres import; build lifecycle; registry API (`/api/registry`).
+- `services/recorder/` — Fastify recorder (:3000): telemetry/frames/
+  position → NVMe spool → Postgres import; build lifecycle; registry API
+  (`/api/registry`).
 - `services/plugins/` — the harness-facing project root (all four CLIs
   spawn with this as cwd, so each harness's native discovery — `.mcp.json`,
   `.claude-plugin/`, `.opencode/`, `gemini-extension.json`, `.agents/` —
@@ -21,8 +22,9 @@ plane / learning loop; the wiki also holds the topical reference pages).
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
   mode + HMR): Builds registry pages, Agents session browser, right-docked
   agent chat panel.
-- `agentic_sls/pipeline/` — Python data pipeline (console scripts:
-  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|restore-builds>`).
+- `services/pipeline/` — Python data pipeline + its tests (console
+  scripts, run from root:
+  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|deliver-frames|backfill-frames|restore-builds>`).
 - `datasets/Agentic-SLS-Knowledge/` — curated reference corpus served by
   `reference_*` tools (its `source/`). Published HF dataset; the submodule
   pin records which corpus version agents saw. MUST stay initialized
@@ -40,7 +42,7 @@ postgres, pgadmin, web (hot-reloads), broker (`agentic-sls-broker` — the
 four harness CLIs PINNED in its image, bumps = deliberate Dockerfile
 commits, auth bind-mounted from host home), recorder
 (`agentic-sls-recorder`, `restart: on-failure` so a clean
-stop-after-build exit STAYS stopped). server/harness edits deploy via
+stop-after-build exit STAYS stopped). recorder/harness edits deploy via
 `docker compose restart <recorder|broker>` at a safe moment — **never
 restart or recreate the recorder while a print is being recorded**
 (check `/api/health/recording`; use `POST /api/admin/stop-after-build`).
@@ -72,7 +74,7 @@ Logs: `docker logs -f agentic-sls-recorder`.
 
 ## Commands
 
-- Tests: `uv run pytest` (root) · `npm test` + `npm run typecheck` +
+- Tests: `uv run pytest` (root, pipeline suite) · `npm test` + `npm run typecheck` +
   `npx tsx tests/smoke.ts` (services/plugins/mcp/, needs DATABASE_URL
   exported).
 - Headless agent run: `npx tsx harness/run.ts <harness> --prompt '…'`.

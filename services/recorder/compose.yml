@@ -16,8 +16,8 @@ services:
     restart: on-failure
     network_mode: host
     user: "1000:1000"
-    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/server
-    command: ["../node_modules/.bin/tsx", "src/index.ts"]
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/recorder
+    command: ["../../node_modules/.bin/tsx", "src/index.ts"]
     environment:
       HOME: /home/node
       NODE_OPTIONS: --max-old-space-size=12288

@@ -1,49 +1,6 @@
-[project]
-name = "agentic-sls"
-version = "0.0.1"
-description = "Agentic process optimization for selective laser sintering (SLS) additive manufacturing."
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "polars>=1.42.1",
-    "psycopg[binary]>=3.3.4",
-    "pyarrow>=24.0.0",
-    "python-dotenv>=1.2.2",
-]
-
-[project.urls]
-Homepage = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
-Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization/issues"
-
-# The data pipeline (agentic_sls/pipeline/): Postgres ⇄ dataset repos ⇄
-# data/exports/. These are the post-print refresh commands.
-[project.scripts]
-sls-export = "agentic_sls.pipeline.export:main"
-sls-export-conversations = "agentic_sls.pipeline.export_conversations:main"
-sls-sync-reference = "agentic_sls.pipeline.sync_reference:main"
-sls-summarize-builds = "agentic_sls.pipeline.summarize_builds:main"
-sls-match-build-sessions = "agentic_sls.pipeline.match_build_sessions:main"
-sls-restore-builds = "agentic_sls.pipeline.restore_builds:main"
-sls-deliver-frames = "agentic_sls.pipeline.deliver_frames:main"
-sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
-
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-# Flat layout: the package lives at repo-root agentic_sls/ beside the TS
-# workspaces (web/, server/, plugin/) — only the Python package belongs in
-# the wheel.
-[tool.setuptools.packages.find]
-include = ["agentic_sls*"]
-
-[tool.setuptools.package-data]
-"agentic_sls" = ["py.typed"]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# Virtual uv workspace root — pure orchestration, like docker-compose.yml.
+# The actual Python project (deps, console scripts, pytest config) lives in
+# services/pipeline/pyproject.toml. uv keeps the shared lockfile + venv here,
+# which is why `uv run sls-*` / `uv run pytest` work from the repo root.
+[tool.uv.workspace]
+members = ["services/pipeline"]

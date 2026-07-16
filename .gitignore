@@ -2,7 +2,7 @@
 node_modules/
 
 # Server / web build artifacts
-server/dist/
+services/recorder/dist/
 services/web/dist/
 
 # Recorded telemetry, frames, and DB volume — big and machine-specific.

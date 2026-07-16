@@ -1,0 +1,50 @@
+[project]
+name = "agentic-sls"
+version = "0.0.1"
+description = "Agentic process optimization for selective laser sintering (SLS) additive manufacturing."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=1.42.1",
+    "psycopg[binary]>=3.3.4",
+    "pyarrow>=24.0.0",
+    "python-dotenv>=1.2.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization"
+Issues = "https://github.com/ppak10/Agentic-Additive-Manufacturing-Process-Optimization/issues"
+
+# The data pipeline (agentic_sls/pipeline/): Postgres ⇄ dataset repos ⇄
+# data/exports/. These are the post-print refresh commands.
+[project.scripts]
+sls-export = "agentic_sls.pipeline.export:main"
+sls-export-conversations = "agentic_sls.pipeline.export_conversations:main"
+sls-sync-reference = "agentic_sls.pipeline.sync_reference:main"
+sls-summarize-builds = "agentic_sls.pipeline.summarize_builds:main"
+sls-match-build-sessions = "agentic_sls.pipeline.match_build_sessions:main"
+sls-restore-builds = "agentic_sls.pipeline.restore_builds:main"
+sls-deliver-frames = "agentic_sls.pipeline.deliver_frames:main"
+sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentic_sls*"]
+
+[tool.setuptools.package-data]
+"agentic_sls" = ["py.typed"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
