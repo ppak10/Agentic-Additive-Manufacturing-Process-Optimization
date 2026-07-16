@@ -5,7 +5,8 @@ import {
   Bot,
   Boxes,
   FlaskConical,
-  LayoutDashboard,
+  Radar,
+  Rss,
   Layers,
   Moon,
   Radio,
@@ -37,7 +38,7 @@ import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { Agents } from "@/pages/Agents";
 import { Services } from "@/pages/Services";
-import { AgentPanel } from "@/components/AgentPanel";
+import { MissionControl } from "@/pages/MissionControl";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
 import { useJob, type JobStatus } from "@/hooks/useJob";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
@@ -46,7 +47,8 @@ const NAV_GROUPS = [
   {
     label: "Live",
     items: [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/mission", label: "Mission Control", icon: Radar, end: false },
+      { to: "/", label: "Feed", icon: Rss, end: true },
       { to: "/recording", label: "Recording", icon: Radio, end: false },
     ],
   },
@@ -140,7 +142,6 @@ function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () =>
 
 function AppShell() {
   const [dark, setDark] = useState(false);
-  const [agentOpen, setAgentOpen] = useState(false);
   // Single useJob call for the whole app — used by the header system stats
   // and passed down to Dashboard panels (JobPanel, BuildLayoutPanel).
   const job = useJob(1000);
@@ -169,15 +170,6 @@ function AppShell() {
               <span>mem {job.selfUsedMemory}/{job.totalAvailableMemory} MB</span>
             </div>
           )}
-          <Button
-            variant="neutral"
-            size="sm"
-            className={cn("h-7 px-2", !job && "ml-auto")}
-            onClick={() => setAgentOpen((o) => !o)}
-            title="Toggle agent panel"
-          >
-            <Bot className="size-4" />
-          </Button>
         </header>
         <main className="flex-1 overflow-auto">
           <Routes>
@@ -193,11 +185,13 @@ function AppShell() {
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/agents" element={<Agents />} />
+            <Route path="/mission" element={<MissionControl job={job} />} />
             <Route path="/services" element={<Services />} />
           </Routes>
         </main>
       </SidebarInset>
-      {agentOpen && <AgentPanel onClose={() => setAgentOpen(false)} />}
+      {/* The right-docked agent sidebar is gone (2026-07-16): Mission
+          Control's PanelConsole is the single agentic-system surface. */}
     </SidebarProvider>
   );
 }

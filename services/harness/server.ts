@@ -24,6 +24,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { registerPanelRoutes, type Harness as PanelHarness } from "./panel.js";
 import {
   type AgentEvent,
   type TurnStats,
@@ -184,6 +185,7 @@ function runTurn(
   chat: Chat,
   message: string,
   emit: (ev: Ev) => void,
+  timeoutMs?: number,
 ): Promise<{ res: TurnResult; stdout: string; stderr: string }> {
   const cmd = buildCmd(chat, message);
   const child = spawn(cmd[0], cmd.slice(1), {
@@ -191,6 +193,11 @@ function runTurn(
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // Panel candidates run four CLIs in parallel — a hung one must not wedge
+  // the whole turn. SIGKILL surfaces as a normal close (exitCode null → -1).
+  const killer = timeoutMs
+    ? setTimeout(() => child.kill("SIGKILL"), timeoutMs)
+    : null;
 
   const res: TurnResult = { ...emptyTurnStats(), exitCode: -1 };
   res.cliSessionId = chat.cliSessionId;
@@ -230,6 +237,7 @@ function runTurn(
 
   return new Promise((resolve) => {
     child.on("close", (code) => {
+      if (killer) clearTimeout(killer);
       res.exitCode = code ?? -1;
       // Plain-text harnesses (opencode, agy): whole stdout is the reply.
       if (!sawStructured && stdout.trim()) {
@@ -476,6 +484,32 @@ app.get<{ Params: { id: string } }>("/agent/sessions/:id", async (req, reply) =>
     }
   }
   return { session, transcript, stderr: stderrLog };
+});
+
+// ---------------------------------------------------------------------------
+// Panel mode: fresh analyst one-shots per candidate (no session resume —
+// the panel's canonical transcript IS the context), 4-minute kill timeout.
+
+registerPanelRoutes(app, {
+  pool,
+  runOneShot: async (harness: PanelHarness, message: string) => {
+    const synthetic: Chat = {
+      id: "panel",
+      harness,
+      preset: "analyst",
+      cliSessionId: null,
+      conversationId: null,
+      dir: "",
+      turn: 1,
+      busy: false,
+    };
+    const events: Ev[] = [];
+    const full = `${ANALYST_NOTE}\n\n${message}`;
+    const r = await runTurn(synthetic, full, (ev) => {
+      if (ev.type !== "done") events.push(ev);
+    }, 240_000);
+    return { ...r, events };
+  },
 });
 
 await app.listen({ port: PORT, host: "127.0.0.1" });

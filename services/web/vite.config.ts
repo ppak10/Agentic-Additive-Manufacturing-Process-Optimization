@@ -5,6 +5,10 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Load VITE_* vars from the repo-root .env (single config home) — e.g.
+  // the Mission Control plotter-overlay calibration (VITE_PLOTTER_QUAD /
+  // VITE_PLOTTER_FISHEYE). Only VITE_-prefixed vars reach the client.
+  envDir: path.resolve(__dirname, "../.."),
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
@@ -21,6 +25,9 @@ export default defineConfig({
       // Agent session broker (harness/server.ts) — separate process from
       // the recorder on purpose; SSE flows through the plain HTTP proxy.
       "/agent": { target: "http://localhost:3100" },
+      // Defect-detection bridge (services/defect, :3200) — notify-only
+      // client of the v05 model server on MAIL-10.
+      "/defect": { target: "http://localhost:3200" },
     },
   },
 });

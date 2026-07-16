@@ -17,3 +17,4 @@ include:
   - services/web/compose.yml
   - services/harness/compose.yml
   - services/recorder/compose.yml
+  - services/defect/compose.yml

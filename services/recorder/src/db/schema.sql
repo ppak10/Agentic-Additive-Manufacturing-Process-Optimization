@@ -70,6 +70,22 @@ CREATE INDEX IF NOT EXISTS position_hf_build_ts_idx ON position_hf (build_id, ts
 -- etc.). Lets us reconstruct outages after the fact without correlating gaps in
 -- telemetry/frames — the reason someone printed while the recorder was down is
 -- exactly the case this table exists to answer.
+-- Operator-measured calibrations, append-only: latest row per kind is
+-- current; history stays because old builds must be interpreted with the
+-- calibration active at record time (build_layout events snapshot it).
+-- kinds: 'plotter_to_camera' {quad, k1, model} (Mission Control Align);
+--        'thermal_to_plotter' {quad, model} (thermal grid corners in
+--        plotter uv; flat MainBox seed until a thermal align mode exists).
+CREATE TABLE IF NOT EXISTS calibrations (
+  id         BIGSERIAL PRIMARY KEY,
+  kind       TEXT NOT NULL,
+  payload    JSONB NOT NULL,
+  source     TEXT,
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS calibrations_kind_idx ON calibrations (kind, id DESC);
+
 CREATE TABLE IF NOT EXISTS recording_health_events (
   id          BIGSERIAL PRIMARY KEY,
   ts          TIMESTAMPTZ NOT NULL DEFAULT now(),

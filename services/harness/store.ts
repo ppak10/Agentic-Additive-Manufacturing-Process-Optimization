@@ -86,6 +86,40 @@ CREATE INDEX IF NOT EXISTS agent_messages_conv_idx
   ON agent_messages (conversation_id, turn, seq);
 
 ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS conversation_id BIGINT;
+
+-- Panel mode (wiki/Panel-Mode.md; applied live 2026-07-16). Candidates are
+-- ordinary one-turn conversations linked to their panel via parent_id/
+-- parent_turn; agent_selections carries the preference labels; meta on
+-- agent_messages carries event/build references for data turns.
+ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS parent_id BIGINT REFERENCES agent_conversations(id);
+ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS parent_turn INT;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS meta JSONB;
+
+-- One conversation spans many builds (user decision 2026-07-16): the
+-- association is one-to-many via this join table, populated as builds
+-- start/end while the conversation is open. build_id has no FK on purpose
+-- (matches agent_conversations.build_id; restores may recreate builds).
+CREATE TABLE IF NOT EXISTS conversation_builds (
+  conversation_id BIGINT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+  build_id        BIGINT NOT NULL,
+  first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, build_id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_selections (
+  id                BIGSERIAL PRIMARY KEY,
+  conversation_id   BIGINT NOT NULL REFERENCES agent_conversations(id),
+  turn              INT NOT NULL,
+  outcome           TEXT NOT NULL,      -- chosen | tie | none | user_authored
+  chosen_id         BIGINT REFERENCES agent_conversations(id),
+  user_text         TEXT,               -- outcome='user_authored': the gold answer
+  candidate_ids     BIGINT[] NOT NULL,
+  shown_order       JSONB NOT NULL,     -- slot (A-D) -> candidate id
+  stimulus_event_id BIGINT,             -- events.id this turn responded to
+  reason            TEXT,
+  decided_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (conversation_id, turn)
+);
 `;
 
 // Normalized event — same shape the broker streams to the browser.

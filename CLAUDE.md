@@ -18,10 +18,35 @@ plane / learning loop; the wiki also holds the topical reference pages).
   tools, identical for all four harnesses (Claude Code, OpenCode, Codex,
   Antigravity `agy`). Ground rules: `services/plugins/AGENTS.md`.
 - `services/harness/` — uniform headless driver (`run.ts`), chat broker
-  (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill.
+  (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill,
+  panel mode (`panel.ts`: `/agent/panel*` — 4-harness blinded fan-out,
+  `agent_selections` labels incl. `user_authored`, `conversation_builds`
+  one-to-many span tracking, event watcher auto-fans-out alerting
+  defect_detection events to the console panel). GUI: Mission Control's
+  PanelConsole is the ONLY agent surface (right sidebar removed
+  2026-07-16); sonar ping + browser notification on alerts/candidates.
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
-  mode + HMR): Builds registry pages, Agents session browser, right-docked
-  agent chat panel.
+  mode + HMR): Builds registry pages, Agents session browser, Mission
+  Control (chamber card with thermal/defect/exclude-object overlays —
+  click a part outline → confirm → exclude; PanelConsole agent chat; the
+  old right-docked sidebar chat is REMOVED).
+- `services/defect/` — defect-detection bridge (:3200): thin client of the
+  v05 model server on the MAIL-10 workstation (`ssh 10`, serve.py :8100,
+  GPU; started via `runs/v05/deploy.sh` with linuxbrew on PATH). Watches
+  z2 steps on `/api/stream`, buffers chamber/galvo frames per layer, POSTs
+  `/infer`, writes `events` rows (kind='defect_detection') + serves
+  `/defect/latest` to the Mission Control attention bar + anomaly-map
+  overlay on the chamber feed (maps span the FULL frame — model input is
+  the whole chamber view resized square, no bed registration). NOTIFY-ONLY —
+  never commands the printer; safe to restart mid-print. `/infer` takes
+  no plotter_commands (scan mask derives from galvo frames); `alerts` in
+  the response is an ARRAY of class names, not a map. Infers ONLY during
+  the Printing phase (Heating/BedPreparation frames false-alert at
+  0.7–0.98). Operator verdicts on alerts (attention bar, three-state:
+  correct / ignored / incorrect — "ignored" = seen but not acted on,
+  neither a positive nor negative label) → `defect_feedback` events
+  referencing the defect_detection row — the Inova training-label
+  channel.
 - `services/pipeline/` — Python data pipeline + its tests (own
   pyproject; root pyproject is a virtual uv-workspace stub. Console
   scripts, run from root:
@@ -43,7 +68,9 @@ postgres, pgadmin, web (hot-reloads), broker (`agentic-sls-broker` — the
 four harness CLIs PINNED in its image, bumps = deliberate Dockerfile
 commits, auth bind-mounted from host home), recorder
 (`agentic-sls-recorder`, `restart: on-failure` so a clean
-stop-after-build exit STAYS stopped). Each node service owns its
+stop-after-build exit STAYS stopped), defect (`agentic-sls-defect`,
+notify-only bridge to the MAIL-10 model server — safe to restart
+anytime). Each node service owns its
 lockfile; deps are BAKED into images behind anonymous volumes — dep
 changes need `docker compose build <svc> && docker compose up -d -V
 <svc>`; source edits deploy via `docker compose restart
@@ -60,6 +87,27 @@ Logs: `docker logs -f agentic-sls-recorder`.
   view, `build_summaries`, `agent_conversations/…sessions/…messages`,
   `agent_actions`. Reference tables are COPIES — fix data at its origin
   repo and re-run `uv run sls-sync-reference`.
+- **Operator feedback lives in `events`** (exported to Telemetry as
+  `recorder/events.jsonl`): `operator_action` (every GUI override POST —
+  recoater passes, layer/setup overrides, part exclusion with part
+  transform+bounds and latest defect stimulus attached; written by
+  `services/recorder/src/recorder/feedback.ts` at the proxy choke point),
+  `build_layout` (parts array + camera/thermal calibration, at build
+  start and on exclusion change), `layer_objects` (plotter per-layer
+  object set, on version change, + derived `camera_bboxes` per object —
+  chamber-image coords through the operator-measured homography),
+  `defect_feedback` (verdicts from Mission Control via the defect
+  bridge). Coordinates stay NATIVE — calibration block in build_layout
+  does the projection downstream; it includes `plotter_to_camera`
+  (quad + fisheye k1). Calibration source of truth: **`calibrations`
+  table** (append-only, latest per kind wins — history matters for
+  interpreting old builds; kinds: plotter_to_camera, thermal_to_plotter
+  — the thermal grid renders through H∘T, composed in MissionControl). Web Align saves → POST
+  `/api/calibration/plotter_to_camera` (+ localStorage echo; newest
+  timestamp wins across browsers); recorder feedback.ts polls it (~30 s);
+  .env VITE_PLOTTER_* is bootstrap fallback only. Web overlay and
+  recorder feedback.ts share the projection math — keep in sync.
+  Agent `*_set` calls log to `agent_actions` (MCP server) instead.
 - **HF dataset repos**: Agentic-SLS-{Telemetry,Database,ASTM,Conversations}
   are submodules under `datasets/` (Telemetry is 566 GB; all have
   `update = none` — NEVER blanket `--recurse-submodules`; init submodules

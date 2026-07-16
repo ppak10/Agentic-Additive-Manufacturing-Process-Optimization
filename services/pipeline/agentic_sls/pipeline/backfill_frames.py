@@ -42,15 +42,25 @@ def is_delivered(dataset: Path, build_id: int) -> bool:
 
 
 def commit_build(dataset: Path, build_id: int) -> None:
+    """Retries transient index.lock races — a concurrent `git push` (LFS
+    pre-push hooks) can hold the lock momentarily (bit us mid-backfill
+    2026-07-16 while an upload ran)."""
+    import time
     tag = f"{build_id:03d}"
-    subprocess.run(
+    for cmd in (
         ["git", "-C", str(dataset), "add",
          f"source/frames/{tag}", f"data/frames_index/{tag}.parquet"],
-        check=True)
-    subprocess.run(
         ["git", "-C", str(dataset), "commit", "-q", "-m",
          f"Add build {tag} source frames (chunked store-mode zips) + frames index"],
-        check=True)
+    ):
+        for attempt in range(5):
+            try:
+                subprocess.run(cmd, check=True)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 4:
+                    raise
+                time.sleep(3 * (attempt + 1))
 
 
 def main() -> int:

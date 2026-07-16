@@ -1,0 +1,28 @@
+# Defect-detection bridge (:3200) — thin client of the v05 model server
+# running on the MAIL-10 workstation (DEFECT_MODEL_URL). Watches the
+# recorder's layer clock, POSTs frames to /infer, records results as
+# events rows (kind='defect_detection'). Notify-only: it never commands
+# the printer, and it is always safe to restart mid-print.
+services:
+  defect:
+    build: .
+    container_name: agentic-sls-defect
+    restart: on-failure
+    network_mode: host
+    user: "1000:1000"
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/defect
+    command: ["./node_modules/.bin/tsx", "src/index.ts"]
+    environment:
+      HOME: /home/node
+      DATABASE_URL: ${DATABASE_URL}
+      DEFECT_MODEL_URL: ${DEFECT_MODEL_URL:-http://128.2.112.20:8100}
+    volumes:
+      - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      # image-baked deps over the repo bind (refresh: build + up -d -V)
+      - /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/defect/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3200/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

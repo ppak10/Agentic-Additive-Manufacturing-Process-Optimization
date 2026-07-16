@@ -23,7 +23,7 @@ interface Msg {
   tool?: ToolCall;
 }
 
-export function AgentPanel({ onClose }: { onClose: () => void }) {
+export function AgentPanel({ onClose, embedded = false }: { onClose?: () => void; embedded?: boolean }) {
   const location = useLocation();
   const [harness, setHarness] = useState<Harness>("claude");
   const [operator, setOperator] = useState(false);
@@ -146,7 +146,13 @@ export function AgentPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <aside className="w-96 shrink-0 border-l-2 border-border bg-background flex flex-col h-svh sticky top-0">
+    <aside
+      className={
+        embedded
+          ? "flex flex-col h-full min-h-0 w-full bg-background"
+          : "w-96 shrink-0 border-l-2 border-border bg-background flex flex-col h-svh sticky top-0"
+      }
+    >
       <div className="flex items-center gap-2 border-b-2 border-border px-2 py-2">
         <select
           className="text-xs bg-background border-2 border-border rounded px-1 py-0.5"
@@ -169,9 +175,11 @@ export function AgentPanel({ onClose }: { onClose: () => void }) {
         <Button variant="neutral" size="sm" className="ml-auto h-7 px-2" onClick={reset} title="New chat">
           <Plus className="size-3" />
         </Button>
-        <Button variant="neutral" size="sm" className="h-7 px-2" onClick={onClose} title="Close panel">
-          <X className="size-3" />
-        </Button>
+        {onClose && (
+          <Button variant="neutral" size="sm" className="h-7 px-2" onClick={onClose} title="Close panel">
+            <X className="size-3" />
+          </Button>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 grid gap-2 content-start">

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { usePrintingObjects, excludePrintingObject, type PrintingObject } from "@/hooks/usePrintingObjects";
 import { usePlotterVersion } from "@/hooks/usePlotterVersion";
 import { usePlotterObjects, type PlotterObjectsState } from "@/hooks/usePlotterObjects";
+import { useLayerSlices, type LayerSlice } from "@/hooks/useLayerSlices";
 import type { JobStatus } from "@/hooks/useJob";
 import { useChamber } from "@/hooks/useChamber";
 import { BuildLayout3D } from "@/panels/BuildLayout3D";
@@ -89,7 +90,9 @@ function groupObjects(objects: PrintingObject[]): Map<string, PrintingObject[]> 
   return groups;
 }
 
-function ConfirmModal({
+// Exported for Mission Control's chamber-overlay exclude flow — identical
+// confirm UX in both places.
+export function ConfirmModal({
   obj,
   action,
   onConfirm,
@@ -156,12 +159,14 @@ function ConfirmModal({
 // any container size.
 function BuildLayoutSvg({
   plotterObjects,
+  slices,
   selectedId,
   hoveredId,
   onSelect,
   onHover,
 }: {
   plotterObjects: PlotterObjectsState | null;
+  slices: LayerSlice[];
   selectedId: number | null;
   hoveredId: number | null;
   onSelect: (id: number) => void;
@@ -176,9 +181,51 @@ function BuildLayoutSvg({
       preserveAspectRatio="xMidYMid meet"
       className="block w-full h-full"
     >
-      {plotterObjects?.objects.map((obj) => {
+      {/* vector cross-sections for every sliced part — including parts the
+          plot hasn't rastered yet this layer */}
+      {slices.filter((sl) => sl.loops.length > 0).map((sl) => {
+        const isSelected = sl.id === selectedId;
+        const isHovered = sl.id === hoveredId;
+        const d = sl.loops
+          .map(
+            (loop) =>
+              `M ${loop.map(([u, v]) => `${(u * width).toFixed(2)},${(v * height).toFixed(2)}`).join(" L ")} Z`,
+          )
+          .join(" ");
+        return (
+          <path
+            key={sl.id}
+            d={d}
+            fillRule="evenodd"
+            vectorEffect="non-scaling-stroke"
+            onClick={() => onSelect(sl.id)}
+            onMouseEnter={() => onHover(sl.id)}
+            onMouseLeave={() => onHover(null)}
+            className={cn(
+              "cursor-pointer transition-all fill-main/25 stroke-main/80",
+              isHovered && !isSelected && "!fill-main/45 stroke-foreground/70 [stroke-width:2]",
+              isSelected && "!fill-main/60 stroke-foreground [stroke-width:3]",
+            )}
+          />
+        );
+      })}
+      {plotterObjects?.objects.filter((o) => !slices.some((sl) => sl.id === o.id && sl.loops.length > 0)).map((obj) => {
         const isSelected = obj.id === selectedId;
         const isHovered = obj.id === hoveredId;
+        const cls = cn(
+          "cursor-pointer transition-all fill-main/25 stroke-main/80",
+          // Hover (from list OR plot) brightens the fill — selection
+          // still wins for visual emphasis if both apply. Excluded
+          // parts simply don't appear here (firmware omits them from
+          // /plotter/objects); the list-row badge carries that signal.
+          isHovered && !isSelected && "!fill-main/45 stroke-foreground/70 [stroke-width:2]",
+          isSelected && "!fill-main/60 stroke-foreground [stroke-width:3]",
+        );
+        const handlers = {
+          onClick: () => onSelect(obj.id),
+          onMouseEnter: () => onHover(obj.id),
+          onMouseLeave: () => onHover(null),
+        };
         // CodePlotterMarkedObject.RelativeOutline is normalized (0..1) over
         // the plotter raster — scale by width/height to land in the viewBox.
         const points = obj.outline.map(([x, y]) => `${x * width},${y * height}`).join(" ");
@@ -187,18 +234,8 @@ function BuildLayoutSvg({
             key={obj.id}
             points={points}
             vectorEffect="non-scaling-stroke"
-            onClick={() => onSelect(obj.id)}
-            onMouseEnter={() => onHover(obj.id)}
-            onMouseLeave={() => onHover(null)}
-            className={cn(
-              "cursor-pointer transition-all fill-main/25 stroke-main/80",
-              // Hover (from list OR plot) brightens the fill — selection
-              // still wins for visual emphasis if both apply. Excluded
-              // parts simply don't appear here (firmware omits them from
-              // /plotter/objects); the list-row badge carries that signal.
-              isHovered && !isSelected && "!fill-main/45 stroke-foreground/70 [stroke-width:2]",
-              isSelected && "!fill-main/60 stroke-foreground [stroke-width:3]",
-            )}
+            {...handlers}
+            className={cls}
           />
         );
       })}
@@ -232,6 +269,7 @@ export function BuildLayoutPanel({ job }: { job: JobStatus | null }) {
   const { objects, unavailable, refresh } = usePrintingObjects(2000);
   const plotter = usePlotterVersion(2000);
   const plotterObjects = usePlotterObjects(2000);
+  const slices = useLayerSlices(plotterObjects, objects, job?.phase === "Layers");
   const chamber = useChamber();
   // Phase-1 placeholder slice thickness (typical SLS). When we have a
   // /api/print-profile endpoint we'll pull the real value.
@@ -344,6 +382,7 @@ export function BuildLayoutPanel({ job }: { job: JobStatus | null }) {
               <div className="relative border-2 border-border bg-background overflow-hidden aspect-square w-full">
                 <BuildLayoutSvg
                   plotterObjects={plotterObjects}
+                  slices={slices}
                   selectedId={selectedId}
                   hoveredId={hoveredId}
                   onSelect={setSelectedId}

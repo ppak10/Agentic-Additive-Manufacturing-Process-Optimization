@@ -10,6 +10,7 @@ import { pool } from "../db/pool.js";
 import { spoolFilePath } from "../recorder/spool.js";
 import type { FrameSpoolLine } from "../recorder/camera.js";
 import { getLatestSnapshot } from "../recorder/telemetry.js";
+import { recordOperatorAction } from "../recorder/feedback.js";
 import { getLatestPrintingStatus } from "../recorder/job.js";
 import { addPositionSubscriber, removePositionSubscriber } from "../recorder/positionStream.js";
 import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
@@ -302,6 +303,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   };
 
+  // Operator calibrations (append-only; latest per kind wins). The web's
+  // Align mode POSTs here; feedback.ts reads the same rows for the
+  // build_layout/camera_bboxes projection. GET returns the current row.
+  app.get<{ Params: { kind: string } }>("/api/calibration/:kind", async (req, reply) => {
+    const { rows } = await pool.query(
+      `SELECT id, kind, payload, source, note, created_at FROM calibrations
+       WHERE kind = $1 ORDER BY id DESC LIMIT 1`,
+      [req.params.kind],
+    );
+    if (rows.length === 0) return reply.code(404).send({ error: "no calibration recorded" });
+    return rows[0];
+  });
+  app.post<{ Params: { kind: string }; Body: { payload?: unknown; source?: string; note?: string } }>(
+    "/api/calibration/:kind",
+    async (req, reply) => {
+      if (!req.body?.payload || typeof req.body.payload !== "object") {
+        return reply.code(400).send({ error: "body.payload (object) required" });
+      }
+      const { rows } = await pool.query(
+        `INSERT INTO calibrations (kind, payload, source, note)
+         VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+        [req.params.kind, JSON.stringify(req.body.payload),
+         req.body.source ?? null, req.body.note ?? null],
+      );
+      return rows[0];
+    },
+  );
+
   app.get("/api/camera/chamber.jpg", cameraProxy("/api/videocamera/image/", "image/jpeg"));
   app.get("/api/camera/thermal.gif", cameraProxy("/api/bedmatrix/image/", "image/gif"));
   app.get("/api/camera/galvo.png", cameraProxy("/api/plottedimage/", "image/png"));
@@ -479,7 +508,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         });
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        return await r.json();
+        const data = await r.json();
+        void recordOperatorAction("recoater_passes", { value }, app.log);
+        return data;
       } catch (err) {
         tripUpstream(config.INOVA_API_BASE_URL);
         const msg = (err as Error)?.message ?? String(err);
@@ -519,7 +550,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         );
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        return await r.json();
+        const data = await r.json();
+        void recordOperatorAction("recoater_passes_full", { value, powder }, app.log);
+        return data;
       } catch (err) {
         tripUpstream(config.INOVA_API_BASE_URL);
         const msg = (err as Error)?.message ?? String(err);
@@ -551,7 +584,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         });
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        return await r.json();
+        const data = await r.json();
+        void recordOperatorAction("layer_overrides", { values: req.body.values }, app.log);
+        return data;
       } catch (err) {
         tripUpstream(config.INOVA_API_BASE_URL);
         const msg = (err as Error)?.message ?? String(err);
@@ -585,7 +620,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         });
         if (r.status === 400) return reply.code(400).send(await r.json());
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        return await r.json();
+        const data = await r.json();
+        void recordOperatorAction("setup_overrides", { values: req.body.values }, app.log);
+        return data;
       } catch (err) {
         tripUpstream(config.INOVA_API_BASE_URL);
         const msg = (err as Error)?.message ?? String(err);
@@ -614,7 +651,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
           body: JSON.stringify({ excluded: req.body.excluded }),
         });
         if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        return await r.json();
+        const data = await r.json();
+        void recordOperatorAction("exclude_part", { object_id: id, excluded: req.body.excluded }, app.log);
+        return data;
       } catch (err) {
         tripUpstream(config.INOVA_API_BASE_URL);
         const msg = (err as Error)?.message ?? String(err);

@@ -11,6 +11,8 @@ export function useCameraStream(path: string): { src: string | null; connected: 
   const [connected, setConnected] = useState(false);
   const currentUrl = useRef<string | null>(null);
 
+  const wsRef = useRef<WebSocket | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     let backoff = 1000;
@@ -19,6 +21,7 @@ export function useCameraStream(path: string): { src: string | null; connected: 
       if (cancelled) return;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${proto}://${window.location.host}${path}`);
+      wsRef.current = ws;
       ws.binaryType = "blob";
 
       ws.onopen = () => { setConnected(true); backoff = 1000; };
@@ -45,6 +48,11 @@ export function useCameraStream(path: string): { src: string | null; connected: 
     connect();
     return () => {
       cancelled = true;
+      // CLOSE the socket on unmount — without this, every unmount (incl.
+      // vite HMR updates) leaked a live connection still receiving ~12 fps
+      // of JPEG blobs; a dev session's worth of edits made pages crawl.
+      wsRef.current?.close();
+      wsRef.current = null;
       if (currentUrl.current) {
         URL.revokeObjectURL(currentUrl.current);
         currentUrl.current = null;
