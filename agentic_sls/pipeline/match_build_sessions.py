@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 
 DEFAULT_SESSIONS_DIR = (
     Path(__file__).resolve().parent.parent.parent
-    / "datasets/Inova-Mk1-Database/source/PrintSessions"
+    / "datasets/Agentic-SLS-Database/source/PrintSessions"
 )
 CSV_COLS = ["build_id", "inova_session_id", "notes"]
 
@@ -233,7 +233,7 @@ def main() -> int:
     ap.add_argument("--csv", type=Path,
                     default=Path("data/exports/build_to_inova_session.csv"))
     ap.add_argument("--sessions-dir", type=Path, default=DEFAULT_SESSIONS_DIR,
-                    help="Inova-Mk1-Database PrintSessions directory")
+                    help="Agentic-SLS-Database PrintSessions directory")
     ap.add_argument("--builds-jsonl", type=Path, default=None,
                     help="Read builds from an exported builds.jsonl instead of "
                          "Postgres (no DB connection needed)")

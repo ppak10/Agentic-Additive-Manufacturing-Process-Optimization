@@ -20,7 +20,7 @@ plane / learning loop; the wiki also holds the topical reference pages).
   agent chat panel.
 - `agentic_sls/pipeline/` — Python data pipeline (console scripts:
   `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|restore-builds>`).
-- `datasets/SLS-Knowledge/` — curated reference corpus served by
+- `datasets/Agentic-SLS-Knowledge/` — curated reference corpus served by
   `reference_*` tools (its `source/`). Published HF dataset; the submodule
   pin records which corpus version agents saw. MUST stay initialized
   (unlike the big datasets, no `update = none`).
@@ -51,14 +51,14 @@ Logs: `journalctl --user -u agentic-recorder -f`.
   view, `build_summaries`, `agent_conversations/…sessions/…messages`,
   `agent_actions`. Reference tables are COPIES — fix data at its origin
   repo and re-run `uv run sls-sync-reference`.
-- **HF dataset repos**: Inova-Mk1-{Telemetry,Database,ASTM,Conversations}
+- **HF dataset repos**: Agentic-SLS-{Telemetry,Database,ASTM,Conversations}
   are submodules under `datasets/` (Telemetry is 566 GB; all have
   `update = none` — NEVER blanket `--recurse-submodules`; init submodules
   explicitly; hf.co remotes need the HF SSH key). All read from
   `data/exports/` by relative path. Raw agent transcripts write DIRECTLY
-  into datasets/Inova-Mk1-Conversations/source/sessions (commit that repo
-  often). Conversations' HF remote name typo ("Coversations") is known —
-  don't fix it.
+  into datasets/Agentic-SLS-Conversations/source/sessions (commit that
+  repo often). (Datasets renamed Inova-Mk1-* → Agentic-SLS-* 2026-07-16;
+  the old "Coversations" remote typo died in the rename.)
 - Old-era (pre-2026-07-13-restore) raw telemetry lives only in
   `data/exports/telemetry/*.parquet`, not Postgres — summarize from
   parquet, never `--source postgres` for big builds (fetch too slow).

@@ -1,7 +1,7 @@
 // Harness session runner — the uniform driver over the four agent CLIs.
 //
 // Spawns a headless session, archives the raw transcript (directly into
-// the Inova-Mk1-Conversations dataset repo's source/sessions/ — see
+// the Agentic-SLS-Conversations dataset repo's source/sessions/ — see
 // sessionsRoot in store.ts), and records a normalized row in agent_sessions
 // (harness, model, role, build_id, tool calls, tokens, duration). This is
 // both the orchestration entry point (watchdog / reflector triggers call

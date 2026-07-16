@@ -1,8 +1,8 @@
 """Sync firmware- and lab-origin reference data into Postgres.
 
 Postgres is the agent's single query surface, but jobs/profiles/sessions
-originate in the printer firmware (harvested into Inova-Mk1-Database) and
-mechanical results originate in the test lab (harvested into Inova-Mk1-ASTM).
+originate in the printer firmware (harvested into Agentic-SLS-Database) and
+mechanical results originate in the test lab (harvested into Agentic-SLS-ASTM).
 This script maintains synced copies as reference tables:
 
   inova_jobs            one row per Formlabs job (.s4a metadata)
@@ -228,9 +228,9 @@ def main() -> int:
         description="Sync reference data (jobs/profiles/sessions/ASTM) into "
                     "Postgres.")
     ap.add_argument("--database-repo", type=Path,
-                    default=DATASETS_DIR / "Inova-Mk1-Database")
+                    default=DATASETS_DIR / "Agentic-SLS-Database")
     ap.add_argument("--astm-repo", type=Path,
-                    default=DATASETS_DIR / "Inova-Mk1-ASTM")
+                    default=DATASETS_DIR / "Agentic-SLS-ASTM")
     args = ap.parse_args()
 
     for repo in [args.database_repo, args.astm_repo]:

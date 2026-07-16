@@ -24,7 +24,7 @@ error with instructions if unset).
 | `astm_query` | Mechanical results (D638 tensile / D790 flex), grouped by batch/profile/material or per-specimen. |
 | `telemetry_summary` | Derived telemetry for one build: thermal tracking error, recoat timeline, laser duty. |
 | `db_query` | Single read-only SELECT for anything the curated tools don't cover (schema hint in the tool description). |
-| `reference_list` / `reference_get` | Curated reference corpus (`datasets/SLS-Knowledge/source/`): material TDS values, Fuse 1 ↔ Inova translation, profile conventions. |
+| `reference_list` / `reference_get` | Curated reference corpus (`datasets/Agentic-SLS-Knowledge/source/`): material TDS values, Fuse 1 ↔ Inova translation, profile conventions. |
 
 Every `*_set` call is logged server-side to the `agent_actions` table
 (timestamped onto the telemetry timeline) — this is expected behavior, not

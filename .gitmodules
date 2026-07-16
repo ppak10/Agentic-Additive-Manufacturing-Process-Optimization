@@ -8,24 +8,24 @@
 	path = sls4all/Inova-Defect-Detection-Model
 	url = git@github.com:ppak10/Inova-Defect-Detection-Model.git
 [submodule "datasets/Inova-Mk1-Telemetry"]
-	path = datasets/Inova-Mk1-Telemetry
-	url = git@hf.co:datasets/ppak10/Inova-Mk1-Telemetry
+	path = datasets/Agentic-SLS-Telemetry
+	url = git@hf.co:datasets/ppak10/Agentic-SLS-Telemetry
 	update = none
 [submodule "datasets/Inova-Mk1-Database"]
-	path = datasets/Inova-Mk1-Database
-	url = git@hf.co:datasets/ppak10/Inova-Mk1-Database
+	path = datasets/Agentic-SLS-Database
+	url = git@hf.co:datasets/ppak10/Agentic-SLS-Database
 	update = none
 [submodule "datasets/Inova-Mk1-ASTM"]
-	path = datasets/Inova-Mk1-ASTM
-	url = git@hf.co:datasets/ppak10/Inova-Mk1-ASTM
+	path = datasets/Agentic-SLS-ASTM
+	url = git@hf.co:datasets/ppak10/Agentic-SLS-ASTM
 	update = none
 [submodule "datasets/Inova-Mk1-Conversations"]
-	path = datasets/Inova-Mk1-Conversations
-	url = git@hf.co:datasets/ppak10/Inova-Mk1-Coversations
+	path = datasets/Agentic-SLS-Conversations
+	url = git@hf.co:datasets/ppak10/Agentic-SLS-Conversations
 	update = none
 [submodule "Agentic-Additive-Manufacturing-Process-Optimization.wiki"]
 	path = wiki
 	url = git@github.com:ppak10/Agentic-Additive-Manufacturing-Process-Optimization.wiki.git
 [submodule "datasets/SLS-Knowledge"]
-	path = datasets/SLS-Knowledge
-	url = git@hf.co:datasets/ppak10/SLS-Knowledge
+	path = datasets/Agentic-SLS-Knowledge
+	url = git@hf.co:datasets/ppak10/Agentic-SLS-Knowledge

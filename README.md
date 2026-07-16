@@ -50,7 +50,7 @@ data/exports/
   builds.jsonl
   events.jsonl                  (embedding column dropped)
   frames.jsonl                  (embedding column dropped)
-  build_to_inova_session.csv    (sidecar; manual mapping to Inova-Mk1-Database)
+  build_to_inova_session.csv    (sidecar; manual mapping to Agentic-SLS-Database)
   sensors.csv                   (sidecar; (sensor_id, kind) glossary)
   telemetry/{build_id}.parquet
   position_hf/{build_id}.parquet

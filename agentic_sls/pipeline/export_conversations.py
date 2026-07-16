@@ -1,5 +1,5 @@
 """Flat-file export of agent conversations (agent_conversations,
-agent_messages, agent_sessions) for the Inova-Mk1-Conversations HF dataset.
+agent_messages, agent_sessions) for the Agentic-SLS-Conversations HF dataset.
 
 One JSONL row per conversation:
   {id, created_at, harness, model, role, preset, build_id, cli_session_id,

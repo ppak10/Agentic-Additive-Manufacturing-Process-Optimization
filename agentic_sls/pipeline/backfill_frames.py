@@ -62,7 +62,7 @@ def main() -> int:
                     help="comma-separated explicit build ids (overrides discovery)")
     ap.add_argument("--frames-dir", type=Path, default=REPO / "data" / "frames")
     ap.add_argument("--dataset", type=Path,
-                    default=REPO / "datasets" / "Inova-Mk1-Telemetry")
+                    default=REPO / "datasets" / "Agentic-SLS-Telemetry")
     ap.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
     ap.add_argument("--no-commit", action="store_true",
                     help="deliver only; leave the dataset working tree dirty")
@@ -98,7 +98,7 @@ def main() -> int:
     print(f"batch done. {len(remaining)} buffered build(s) still undelivered: "
           f"{remaining if remaining else '—'}")
     if not args.no_commit:
-        print("push when ready: git -C datasets/Inova-Mk1-Telemetry push")
+        print("push when ready: git -C datasets/Agentic-SLS-Telemetry push")
     return 0
 
 

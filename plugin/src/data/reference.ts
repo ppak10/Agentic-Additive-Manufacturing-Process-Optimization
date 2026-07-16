@@ -11,7 +11,7 @@ import { errorResult, jsonResult } from "../result.js";
 // titles+summaries, fetch by id. Grows into lexical search only if the
 // corpus outgrows its index.
 //
-// Location: KNOWLEDGE_DIR env, falling back to the SLS-Knowledge
+// Location: KNOWLEDGE_DIR env, falling back to the Agentic-SLS-Knowledge
 // dataset submodule's source/ when the plugin runs from a repo checkout
 // (the normal case for all four harnesses). The corpus is a published HF
 // dataset; the parent repo's submodule pin records exactly which corpus
@@ -22,7 +22,7 @@ function knowledgeDir(): string {
   if (process.env.KNOWLEDGE_DIR) return process.env.KNOWLEDGE_DIR;
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(
-    here, "..", "..", "..", "datasets", "SLS-Knowledge", "source");
+    here, "..", "..", "..", "datasets", "Agentic-SLS-Knowledge", "source");
 }
 
 interface DocMeta {

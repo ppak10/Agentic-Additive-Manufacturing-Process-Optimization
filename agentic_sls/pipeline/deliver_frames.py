@@ -1,4 +1,4 @@
-"""Deliver a build's frames into the Inova-Mk1-Telemetry dataset.
+"""Deliver a build's frames into the Agentic-SLS-Telemetry dataset.
 
 Implements the frames flow of wiki/Source-Based-Dataset-Layout.md
 (settled 2026-07-15):
@@ -181,7 +181,7 @@ def main() -> int:
     ap.add_argument("--build", type=int, required=True)
     ap.add_argument("--frames-dir", type=Path, default=REPO / "data" / "frames")
     ap.add_argument("--dataset", type=Path,
-                    default=REPO / "datasets" / "Inova-Mk1-Telemetry")
+                    default=REPO / "datasets" / "Agentic-SLS-Telemetry")
     ap.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
