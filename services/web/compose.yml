@@ -7,20 +7,22 @@
 # localhost:3000/3100 on the HOST (recorder + broker), and the LAN binding
 # on 0.0.0.0:5173 carries over unchanged.
 #
-# The repo is bind-mounted at its REAL host path and the command runs from
-# the repo root via npm workspaces — node_modules are the hoisted root
-# ones (same linux-x64/glibc platform in node:22-bookworm as the host, so
-# native binaries like esbuild resolve identically).
+# The repo is bind-mounted at its REAL host path; dependencies are BAKED
+# INTO THE IMAGE from this service's own lockfile and surfaced through an
+# anonymous volume over node_modules (dependency isolation, 2026-07-16).
 services:
   web:
-    image: node:22-bookworm
+    build: .
     container_name: agentic-sls-web
     restart: unless-stopped
     network_mode: host
-    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
-    command: ["npm", "run", "dev", "-w", "agentic-sls-web"]
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/web
+    command: ["npm", "run", "dev"]
     volumes:
       - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      # anonymous volume: image-installed deps win over the repo bind at
+      # this subpath (refresh with `docker compose up -d -V web`)
+      - /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/web/node_modules
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5173/ >/dev/null || exit 1"]
       interval: 15s

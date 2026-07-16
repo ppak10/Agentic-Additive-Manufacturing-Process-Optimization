@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 
 # Database and ASTM live in-repo as submodules under datasets/.
-DATASETS_DIR = Path(__file__).resolve().parent.parent.parent / "datasets"
+DATASETS_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "datasets"
 
 DDL = """
 -- One row per .s4a archive = per print instance. The same firmware job

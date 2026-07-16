@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyRequest, FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
@@ -318,9 +318,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Pass-through WS proxies for plugin endpoints. Browser → server → plugin.
   // Lets the browser stay on one origin and survives plugin restarts cleanly.
   const wsBase = config.INOVA_API_BASE_URL.replace(/^http/, "ws");
-  const proxyPluginWs = (upstreamPath: string) => (client: WebSocket, req: { query: Record<string, string | string[]> }) => {
+  const proxyPluginWs = (upstreamPath: string) => (client: WebSocket, req: FastifyRequest) => {
     const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(req.query)) qs.set(k, String(Array.isArray(v) ? v[0] : v));
+    const query = req.query as Record<string, string | string[]>;
+    for (const [k, v] of Object.entries(query)) qs.set(k, String(Array.isArray(v) ? v[0] : v));
     const url = `${wsBase}${upstreamPath}${qs.size ? `?${qs}` : ""}`;
     const upstream = new WebSocket(url);
     upstream.on("message", (data) => {

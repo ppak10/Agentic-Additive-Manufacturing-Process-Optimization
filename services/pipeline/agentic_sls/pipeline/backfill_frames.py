@@ -26,7 +26,7 @@ from pathlib import Path
 
 from agentic_sls.pipeline.deliver_frames import CHUNK_SIZE, deliver_build
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent.parent
 
 
 def buffered_builds(frames_dir: Path) -> list[int]:

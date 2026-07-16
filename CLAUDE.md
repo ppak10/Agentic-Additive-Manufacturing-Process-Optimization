@@ -22,7 +22,8 @@ plane / learning loop; the wiki also holds the topical reference pages).
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
   mode + HMR): Builds registry pages, Agents session browser, right-docked
   agent chat panel.
-- `services/pipeline/` — Python data pipeline + its tests (console
+- `services/pipeline/` — Python data pipeline + its tests (own
+  pyproject; root pyproject is a virtual uv-workspace stub. Console
   scripts, run from root:
   `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|deliver-frames|backfill-frames|restore-builds>`).
 - `datasets/Agentic-SLS-Knowledge/` — curated reference corpus served by
@@ -42,8 +43,11 @@ postgres, pgadmin, web (hot-reloads), broker (`agentic-sls-broker` — the
 four harness CLIs PINNED in its image, bumps = deliberate Dockerfile
 commits, auth bind-mounted from host home), recorder
 (`agentic-sls-recorder`, `restart: on-failure` so a clean
-stop-after-build exit STAYS stopped). recorder/harness edits deploy via
-`docker compose restart <recorder|broker>` at a safe moment — **never
+stop-after-build exit STAYS stopped). Each node service owns its
+lockfile; deps are BAKED into images behind anonymous volumes — dep
+changes need `docker compose build <svc> && docker compose up -d -V
+<svc>`; source edits deploy via `docker compose restart
+<recorder|broker>` at a safe moment — **never
 restart or recreate the recorder while a print is being recorded**
 (check `/api/health/recording`; use `POST /api/admin/stop-after-build`).
 Logs: `docker logs -f agentic-sls-recorder`.
@@ -77,7 +81,7 @@ Logs: `docker logs -f agentic-sls-recorder`.
 - Tests: `uv run pytest` (root, pipeline suite) · `npm test` + `npm run typecheck` +
   `npx tsx tests/smoke.ts` (services/plugins/mcp/, needs DATABASE_URL
   exported).
-- Headless agent run: `npx tsx harness/run.ts <harness> --prompt '…'`.
+- Headless agent run: `services/harness/node_modules/.bin/tsx services/harness/run.ts <harness> --prompt '…'` (no root node_modules — bare `npx tsx` at root would fetch an unpinned tsx).
 - Post-print refresh: `sls-export` → `sls-summarize-builds` →
   (new sessions?) rsync `ppak@inova:/home/ppak/SLS4All/PrintSessions/`
   into `sls4all/SLS4All-Backup` (submodule, 10 GB, `update = none`) +

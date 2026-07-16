@@ -262,7 +262,13 @@ async function main(): Promise<number> {
   // Normalized message-level record (agent_conversations/agent_messages) —
   // same parser and tables the chat broker uses.
   const parsed = parseTranscript(harness, stdout);
+  // ...stats FIRST: it carries its own `model` (parsed from the stream,
+  // null for plain-text harnesses) which must NOT overwrite an explicit
+  // --model. This exact overwrite bug is why opencode/agy session rows
+  // recorded model=null even when a model was passed (found by the first
+  // harness typecheck, 2026-07-16).
   const meta = {
+    ...stats,
     harness,
     role,
     build_id: buildId,
@@ -272,7 +278,6 @@ async function main(): Promise<number> {
     started_at: startedAt.toISOString(),
     ended_at: endedAt.toISOString(),
     exit_code: exitCode,
-    ...stats,
   };
   writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
 

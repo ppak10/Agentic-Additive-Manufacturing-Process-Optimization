@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 
 DEFAULT_SESSIONS_DIR = (
-    Path(__file__).resolve().parent.parent.parent
+    Path(__file__).resolve().parent.parent.parent.parent.parent
     / "datasets/Agentic-SLS-Database/source/PrintSessions"
 )
 CSV_COLS = ["build_id", "inova_session_id", "notes"]
@@ -231,7 +231,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="Write reviewed CSV UUIDs into builds.inova_session_id")
     ap.add_argument("--csv", type=Path,
-                    default=Path(__file__).resolve().parent.parent.parent
+                    default=Path(__file__).resolve().parent.parent.parent.parent.parent
                     / "datasets" / "Agentic-SLS-Database" / "source"
                     / "build_to_inova_session.csv")
     ap.add_argument("--sessions-dir", type=Path, default=DEFAULT_SESSIONS_DIR,

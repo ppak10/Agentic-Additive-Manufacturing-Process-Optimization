@@ -40,7 +40,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent.parent
 FRAME_NAME = re.compile(r"^(\d+)[._]([A-Za-z0-9]+)\.([A-Za-z0-9]+)$")
 
 CHUNK_SIZE = 10_000

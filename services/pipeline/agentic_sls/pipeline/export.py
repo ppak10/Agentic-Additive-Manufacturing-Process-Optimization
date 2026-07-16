@@ -44,7 +44,7 @@ import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent.parent
 from dotenv import load_dotenv
 
 

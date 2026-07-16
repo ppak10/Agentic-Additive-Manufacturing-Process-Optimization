@@ -19,7 +19,7 @@ export function useReplayWindow(
   const [rows, setRows] = useState<TelemetryRow[]>([]);
   const loadedRange = useRef<{ fromMs: number; toMs: number } | null>(null);
   const inflight = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const halfWindow = windowSec * 1000;

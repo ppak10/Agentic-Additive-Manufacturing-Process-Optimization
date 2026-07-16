@@ -62,7 +62,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Export agent conversations to flat JSONL.")
     ap.add_argument("--out", type=Path,
-                    default=Path(__file__).resolve().parent.parent.parent
+                    default=Path(__file__).resolve().parent.parent.parent.parent.parent
                     / "datasets" / "Agentic-SLS-Conversations" / "data")
     args = ap.parse_args()
 

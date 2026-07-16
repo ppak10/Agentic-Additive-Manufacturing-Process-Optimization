@@ -4,21 +4,10 @@
   "private": true,
   "type": "module",
   "main": "services/plugins/.opencode/plugins/agentic-sls.ts",
-  "workspaces": [
-    "services/recorder",
-    "services/web",
-    "services/plugins/mcp",
-    "services/harness"
-  ],
   "scripts": {
-    "dev:server": "npm run dev -w agentic-sls-server",
-    "dev:web": "npm run dev -w agentic-sls-web",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "smoke": "npm run smoke -w @ppak10/agentic-sls-mcp"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "dev:server": "npm --prefix services/recorder run dev",
+    "dev:web": "npm --prefix services/web run dev",
+    "typecheck": "npm --prefix services/recorder run typecheck && npm --prefix services/web run typecheck && npm --prefix services/plugins/mcp run typecheck && npm --prefix services/harness run typecheck",
+    "smoke": "npm --prefix services/plugins/mcp run smoke"
   }
 }

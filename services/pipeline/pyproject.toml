@@ -25,6 +25,7 @@ sls-summarize-builds = "agentic_sls.pipeline.summarize_builds:main"
 sls-match-build-sessions = "agentic_sls.pipeline.match_build_sessions:main"
 sls-restore-builds = "agentic_sls.pipeline.restore_builds:main"
 sls-deliver-frames = "agentic_sls.pipeline.deliver_frames:main"
+sls-deliver-spool = "agentic_sls.pipeline.deliver_spool:main"
 sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
 
 [build-system]

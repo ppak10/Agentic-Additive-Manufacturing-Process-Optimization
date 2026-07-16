@@ -6,17 +6,22 @@
 # on the host. Repo mounted at its real path (identical-path rule).
 services:
   broker:
-    build: .
+    build:
+      context: ../..
+      dockerfile: services/harness/Dockerfile
     container_name: agentic-sls-broker
     restart: unless-stopped
     network_mode: host
     user: "1000:1000"
     working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
-    command: ["npx", "tsx", "services/harness/server.ts"]
+    command: ["services/harness/node_modules/.bin/tsx", "services/harness/server.ts"]
     environment:
       HOME: /home/node
     volumes:
       - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      # image-baked deps win over the repo bind (refresh: build + up -d -V)
+      - /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/harness/node_modules
+      - /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/plugins/mcp/node_modules
       - ~/.claude:/home/node/.claude
       - ~/.claude.json:/home/node/.claude.json
       - ~/.codex:/home/node/.codex

@@ -38,7 +38,7 @@ from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent.parent
 PARQUET_DIR = REPO / "datasets" / "Agentic-SLS-Telemetry" / "source" / "telemetry"
 
 DDL = """

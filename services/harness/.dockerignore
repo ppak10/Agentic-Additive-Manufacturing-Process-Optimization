@@ -1,0 +1,6 @@
+# repo-root build context: only manifests are COPYed; keep the context small
+*
+!services/harness/package.json
+!services/harness/package-lock.json
+!services/plugins/mcp/package.json
+!services/plugins/mcp/package-lock.json

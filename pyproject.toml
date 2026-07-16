@@ -4,3 +4,9 @@
 # which is why `uv run sls-*` / `uv run pytest` work from the repo root.
 [tool.uv.workspace]
 members = ["services/pipeline"]
+
+# Pytest scoping is orchestration: without this, root `uv run pytest`
+# crawls the entire repo (566 GB dataset submodules, unreadable postgres
+# datadir, vendor submodule tests).
+[tool.pytest.ini_options]
+testpaths = ["services/pipeline/tests"]
