@@ -6,7 +6,7 @@ timeline, laser duty, power draw, and per-sensor thermal tracking error.
 Results land in the build_summaries table, keyed by build_id.
 
 Sources:
-  - data/exports/telemetry/{build_id}.parquet (skinny ts/sensor_id/kind/value)
+  - datasets/Agentic-SLS-Telemetry/source/telemetry/{NNN}.parquet (skinny)
     — the only home of pre-wipe raw ticks (old era stays out of Postgres).
   - Postgres telemetry table — for new-era builds. Only use AFTER the
     restore has reconciled build numbering (restore_builds.py).
@@ -38,7 +38,8 @@ from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 
-PARQUET_DIR = Path("data/exports/telemetry")
+REPO = Path(__file__).resolve().parent.parent.parent
+PARQUET_DIR = REPO / "datasets" / "Agentic-SLS-Telemetry" / "source" / "telemetry"
 
 DDL = """
 CREATE TABLE IF NOT EXISTS build_summaries (
@@ -63,7 +64,7 @@ Z2_STEP_UM = (30, 1000)   # one recoat = upward z2 step in this range
 
 def load_ticks(build_id: int, source: str, conn) -> pl.DataFrame | None:
     if source == "parquet":
-        path = PARQUET_DIR / f"{build_id}.parquet"
+        path = PARQUET_DIR / f"{build_id:03d}.parquet"
         if not path.exists():
             return None
         return pl.read_parquet(path)

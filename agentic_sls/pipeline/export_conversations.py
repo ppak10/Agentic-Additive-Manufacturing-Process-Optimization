@@ -15,6 +15,9 @@ Safety: refuses to write if any message payload contains a credential
 (the DATABASE_URL password or a postgres:// URL) — conversations get
 published; the recorder DB does not.
 
+Writes directly into the Conversations dataset's data/ (the published
+file; data/exports retired 2026-07-16).
+
 Usage:
   uv run sls-export-conversations
   uv run sls-export-conversations --out /tmp/exports
@@ -58,7 +61,9 @@ def secret_patterns(dsn: str) -> list[re.Pattern]:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Export agent conversations to flat JSONL.")
-    ap.add_argument("--out", type=Path, default=Path("data/exports"))
+    ap.add_argument("--out", type=Path,
+                    default=Path(__file__).resolve().parent.parent.parent
+                    / "datasets" / "Agentic-SLS-Conversations" / "data")
     args = ap.parse_args()
 
     load_dotenv()

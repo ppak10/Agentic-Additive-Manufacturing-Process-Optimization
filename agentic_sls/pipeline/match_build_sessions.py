@@ -7,7 +7,7 @@ mapping so a human can review it, then applies it.
 
 Two modes:
   propose (default)  Match builds to sessions by interval overlap and write
-                     candidates into data/exports/build_to_inova_session.csv.
+                     candidates into mappings/build_to_inova_session.csv.
                      Hand-filled (non-"auto:") rows are never touched; auto
                      rows are refreshed. Evidence goes in the notes column.
   --apply            Read the CSV and write non-empty session UUIDs into
@@ -231,7 +231,8 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="Write reviewed CSV UUIDs into builds.inova_session_id")
     ap.add_argument("--csv", type=Path,
-                    default=Path("data/exports/build_to_inova_session.csv"))
+                    default=Path(__file__).resolve().parent.parent.parent
+                    / "mappings" / "build_to_inova_session.csv")
     ap.add_argument("--sessions-dir", type=Path, default=DEFAULT_SESSIONS_DIR,
                     help="Agentic-SLS-Database PrintSessions directory")
     ap.add_argument("--builds-jsonl", type=Path, default=None,

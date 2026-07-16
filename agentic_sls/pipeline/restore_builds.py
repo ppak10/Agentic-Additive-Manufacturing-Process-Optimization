@@ -44,7 +44,11 @@ from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 
-EXPORTS = Path("data/exports")
+# Historical exports relocated 2026-07-16: jsonl now lives in the Telemetry
+# dataset's source/recorder/ (this script is one-shot history; path kept
+# correct in case of another disaster).
+EXPORTS = (Path(__file__).resolve().parent.parent.parent
+           / "datasets" / "Agentic-SLS-Telemetry" / "source" / "recorder")
 FRAMES_DIR = Path("data/frames")
 RENUMBER = [(5, 46), (4, 45), (3, 44), (2, 43), (1, 42)]  # descending!
 CHILD_TABLES = ["telemetry", "position_hf", "frames", "events"]

@@ -1,13 +1,16 @@
-"""Flat-file export of the Postgres recorder DB.
+"""Flat-file export of the Postgres recorder DB into the Telemetry
+dataset's source/ tree (data/exports retired 2026-07-16).
 
-Output layout under --out (default: data/exports/):
-  builds.jsonl
-  events.jsonl                  (embedding column dropped)
-  frames.jsonl                  (embedding column dropped)
-  build_to_inova_session.csv    (sidecar; preserves filled UUIDs across runs)
-  sensors.csv                   (sidecar; preserves filled unit/description across runs)
-  telemetry/{build_id}.parquet
-  position_hf/{build_id}.parquet
+Output layout:
+  <dataset>/source/recorder/builds.jsonl
+  <dataset>/source/recorder/events.jsonl     (embedding column dropped)
+  <dataset>/source/recorder/frames.jsonl     (embedding column dropped)
+  <dataset>/source/recorder/sensors.csv      (sidecar; preserves hand-filled
+                                              unit/description across runs)
+  <dataset>/source/telemetry/{build_id:03d}.parquet
+  <dataset>/source/position_hf/{build_id:03d}.parquet
+  <repo>/mappings/build_to_inova_session.csv (sidecar; hand-reviewed linkage,
+                                              authoritative in the MAIN repo)
 
 Idempotent:
   - Existing parquet files are skipped unless --force.
@@ -38,6 +41,8 @@ from typing import Iterable, Iterator
 import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+REPO = Path(__file__).resolve().parent.parent.parent
 from dotenv import load_dotenv
 
 
@@ -186,7 +191,7 @@ def _write_parquet_chunked(
 
 
 def export_telemetry_for_build(conn, out: Path, build_id: int, force: bool) -> int:
-    p = out / "telemetry" / f"{build_id}.parquet"
+    p = out / "telemetry" / f"{build_id:03d}.parquet"
     if p.exists() and not force:
         return -1
     return _write_parquet_chunked(
@@ -200,7 +205,7 @@ def export_telemetry_for_build(conn, out: Path, build_id: int, force: bool) -> i
 
 
 def export_position_hf_for_build(conn, out: Path, build_id: int, force: bool) -> int:
-    p = out / "position_hf" / f"{build_id}.parquet"
+    p = out / "position_hf" / f"{build_id:03d}.parquet"
     if p.exists() and not force:
         return -1
     return _write_parquet_chunked(
@@ -320,7 +325,10 @@ def main() -> int:
     )
     ap.add_argument("--builds", type=str, default=None,
                     help="Comma-separated build IDs (default: all completed)")
-    ap.add_argument("--out", type=Path, default=Path("data/exports"),
+    ap.add_argument("--dataset", type=Path,
+                    default=REPO / "datasets" / "Agentic-SLS-Telemetry",
+                    help="Telemetry dataset checkout (jsonl+parquet land in its source/)")
+    ap.add_argument("--mappings-dir", type=Path, default=REPO / "mappings",
                     help="Output directory (default: data/exports)")
     ap.add_argument("--include-active", action="store_true",
                     help="Include the currently-open build (ended_at IS NULL)")
@@ -335,32 +343,41 @@ def main() -> int:
         return 1
 
     explicit = parse_build_ids(args.builds)
-    out: Path = args.out
+    dataset: Path = args.dataset
+    if not (dataset / ".git").exists():
+        print(f"ERROR: dataset checkout missing at {dataset} — refusing "
+              "(init the submodule; export never writes outside it)",
+              file=sys.stderr)
+        return 1
+    source = dataset / "source"
+    recorder = source / "recorder"
+    recorder.mkdir(parents=True, exist_ok=True)
+    args.mappings_dir.mkdir(parents=True, exist_ok=True)
 
     with psycopg.connect(dsn) as conn:
         targets = get_target_builds(conn, explicit, args.include_active)
-        print(f"export: {len(targets)} builds → {out}")
+        print(f"export: {len(targets)} builds → {source}")
 
-        n = export_builds(conn, out, explicit)
-        print(f"  builds.jsonl: {n} rows")
-        n = export_events(conn, out, explicit)
-        print(f"  events.jsonl: {n} rows")
-        n = export_frames(conn, out, explicit)
-        print(f"  frames.jsonl: {n} rows")
+        n = export_builds(conn, recorder, explicit)
+        print(f"  recorder/builds.jsonl: {n} rows")
+        n = export_events(conn, recorder, explicit)
+        print(f"  recorder/events.jsonl: {n} rows")
+        n = export_frames(conn, recorder, explicit)
+        print(f"  recorder/frames.jsonl: {n} rows")
 
         for bid in targets:
-            n = export_telemetry_for_build(conn, out, bid, args.force)
+            n = export_telemetry_for_build(conn, source, bid, args.force)
             tag = "skipped" if n < 0 else f"{n} rows"
-            print(f"  telemetry/{bid}.parquet: {tag}")
-            n = export_position_hf_for_build(conn, out, bid, args.force)
+            print(f"  telemetry/{bid:03d}.parquet: {tag}")
+            n = export_position_hf_for_build(conn, source, bid, args.force)
             tag = "skipped" if n < 0 else f"{n} rows"
-            print(f"  position_hf/{bid}.parquet: {tag}")
+            print(f"  position_hf/{bid:03d}.parquet: {tag}")
 
         observed = collect_sensor_pairs(conn)
-        n = update_build_session_csv(conn, out)
-        print(f"  build_to_inova_session.csv: {n} rows (all builds)")
-        n = update_sensors_csv(out, observed)
-        print(f"  sensors.csv: {n} rows (all sensors)")
+        n = update_build_session_csv(conn, args.mappings_dir)
+        print(f"  mappings/build_to_inova_session.csv: {n} rows (all builds)")
+        n = update_sensors_csv(recorder, observed)
+        print(f"  recorder/sensors.csv: {n} rows (all sensors)")
 
     return 0
 
