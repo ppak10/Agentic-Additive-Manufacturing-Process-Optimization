@@ -6,12 +6,12 @@
   "main": ".opencode/plugins/agentic-sls.ts",
   "workspaces": [
     "server",
-    "web",
+    "services/web",
     "plugin"
   ],
   "scripts": {
     "dev:server": "npm run dev -w server",
-    "dev:web": "npm run dev -w web",
+    "dev:web": "npm run dev -w agentic-sls-web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "smoke": "npm run smoke -w plugin"
   },

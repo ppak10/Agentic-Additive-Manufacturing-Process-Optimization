@@ -5,11 +5,13 @@
 # this directory's name) so existing containers keep their identity — do not
 # change it, or compose will want to recreate the live postgres container.
 #
-# Host-coupled processes (recorder, broker, web, agent harness CLIs) stay
-# systemd user units on purpose — see wiki Operations. Candidates that DO
-# belong here later: vLLM for the fine-tuned model, embedding services.
+# Host-coupled processes (recorder, broker, agent harness CLIs) stay
+# systemd user units for now — see wiki Operations. The dashboard (web)
+# moved into compose 2026-07-16; the recorder is next, the broker waits on
+# the harness question. Future citizens: vLLM, embedding services.
 name: agentic-additive-manufacturing-process-optimization
 
 include:
   - services/postgres/compose.yml
   - services/pgadmin/compose.yml
+  - services/web/compose.yml

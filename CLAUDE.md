@@ -15,16 +15,18 @@ plane / learning loop; the wiki also holds the topical reference pages).
   ground rules: `plugin/AGENTS.md`.
 - `harness/` — uniform headless driver (`run.ts`), chat broker
   (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill.
-- `web/` — React/Vite dashboard (:5173): Builds registry pages, Agents
-  session browser, right-docked agent chat panel.
+- `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
+  mode + HMR): Builds registry pages, Agents session browser, right-docked
+  agent chat panel.
 - `agentic_sls/pipeline/` — Python data pipeline (console scripts:
   `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|restore-builds>`).
 - `datasets/SLS-Knowledge/` — curated reference corpus served by
   `reference_*` tools (its `source/`). Published HF dataset; the submodule
   pin records which corpus version agents saw. MUST stay initialized
   (unlike the big datasets, no `update = none`).
-- `services/` — docker compose service fragments (one folder per service:
-  postgres, pgadmin), pulled in by the root `docker-compose.yml` via
+- `services/` — docker compose services (one folder per service: postgres,
+  pgadmin, web — a service folder owns its compose.yml, state, and app
+  code where applicable), pulled in by the root `docker-compose.yml` via
   `include:`. The root file pins `name:` — don't change it (container
   identity). Host-coupled processes stay systemd, infra goes here.
 - `deploy/systemd/` — user units: agentic-recorder, agentic-broker,
@@ -32,9 +34,10 @@ plane / learning loop; the wiki also holds the topical reference pages).
 
 ## Services — IMPORTANT
 
-The recorder, broker, and dashboard run as **systemd user units without
-tsx watch**: editing `server/src` or `harness/` does NOT hot-reload.
-Deploy = `systemctl --user restart agentic-<recorder|broker|web>` at a
+The recorder and broker run as **systemd user units without tsx watch**:
+editing `server/src` or `harness/` does NOT hot-reload. The dashboard runs
+in docker compose (`agentic-sls-web`, vite dev — web edits DO hot-reload).
+Deploy = `systemctl --user restart agentic-<recorder|broker>` at a
 safe moment — **never restart the recorder while a print is being
 recorded** (check `/api/health/recording`; use
 `POST /api/admin/stop-after-build` for graceful maintenance windows).

@@ -3,7 +3,7 @@ node_modules/
 
 # Server / web build artifacts
 server/dist/
-web/dist/
+services/web/dist/
 
 # Recorded telemetry, frames, and DB volume — big and machine-specific.
 # data/exports/ is the cross-repo contract surface: the sidecar CSVs
@@ -236,4 +236,4 @@ __marimo__/
 
 /data/sessions/
 .run-recorder.lock
-web/tsconfig.tsbuildinfo
+services/web/tsconfig.tsbuildinfo
