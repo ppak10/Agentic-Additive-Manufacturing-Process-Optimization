@@ -30,6 +30,11 @@ import {
 } from "./store.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Harness project root: the CLIs run with services/plugins/ as cwd so each
+// harness's native project discovery (.mcp.json, .claude-plugin,
+// .opencode/, gemini-extension.json) anchors on the plugin surface, not
+// the dev repo.
+const PLUGINS_ROOT = path.join(REPO, "services", "plugins");
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -231,7 +236,7 @@ async function main(): Promise<number> {
 
   console.error(`[harness] ${cmd.join(" ").slice(0, 160)}`);
   const child = spawn(cmd[0], cmd.slice(1), {
-    cwd: REPO,
+    cwd: PLUGINS_ROOT,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });

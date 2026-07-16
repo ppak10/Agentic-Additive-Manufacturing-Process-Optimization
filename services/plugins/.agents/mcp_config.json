@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agentic-sls": {
+      "command": "node",
+      "args": [
+        "/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/services/plugins/mcp/scripts/launch-local.cjs"
+      ]
+    }
+  }
+}

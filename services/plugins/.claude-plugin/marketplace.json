@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "agentic-sls",
-      "source": "./plugin",
+      "source": "./mcp",
       "description": "Agentic process optimization for selective laser sintering (SLS) additive manufacturing.",
       "version": "0.1.0",
       "author": {

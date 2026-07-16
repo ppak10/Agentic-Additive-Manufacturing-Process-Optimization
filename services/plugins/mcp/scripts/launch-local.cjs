@@ -8,7 +8,7 @@
 const { readFileSync, existsSync } = require("node:fs");
 const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "..", "..");
+const repoRoot = path.resolve(__dirname, "..", "..", "..", "..");
 
 const envFile = path.join(repoRoot, ".env");
 if (existsSync(envFile)) {
@@ -19,6 +19,9 @@ if (existsSync(envFile)) {
     }
   }
 }
-process.env.KNOWLEDGE_DIR ??= path.join(repoRoot, "knowledge");
+// Corpus moved to the Agentic-SLS-Knowledge dataset (2026-07-15/16) —
+// the old <repo>/knowledge default silently broke reference_* when unset.
+process.env.KNOWLEDGE_DIR ??= path.join(
+  repoRoot, "datasets", "Agentic-SLS-Knowledge", "source");
 
 require("./launch.cjs");

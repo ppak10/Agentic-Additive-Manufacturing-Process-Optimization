@@ -6,7 +6,7 @@
   "mcpServers": {
     "agentic-sls": {
       "command": "node",
-      "args": ["${extensionPath}/plugin/scripts/launch.cjs"]
+      "args": ["${extensionPath}/mcp/scripts/launch.cjs"]
     }
   }
 }

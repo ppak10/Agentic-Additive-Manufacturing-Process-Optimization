@@ -59,7 +59,7 @@ projects, add to `opencode.json`:
   "mcp": {
     "agentic-sls": {
       "type": "local",
-      "command": ["node", "/path/to/repo/plugin/scripts/launch.cjs"],
+      "command": ["node", "/path/to/repo/services/plugins/mcp/scripts/launch.cjs"],
       "enabled": true
     }
   }
@@ -74,7 +74,7 @@ from the project root.
 ### Codex CLI
 
 ```bash
-codex mcp add agentic-sls -- node /path/to/repo/plugin/scripts/launch.cjs
+codex mcp add agentic-sls -- node /path/to/repo/services/plugins/mcp/scripts/launch.cjs
 ```
 
 or in `~/.codex/config.toml`:
@@ -82,7 +82,7 @@ or in `~/.codex/config.toml`:
 ```toml
 [mcp_servers.agentic-sls]
 command = "node"
-args = ["/path/to/repo/plugin/scripts/launch.cjs"]
+args = ["/path/to/repo/services/plugins/mcp/scripts/launch.cjs"]
 
 [mcp_servers.agentic-sls.env]
 INOVA_API_BASE_URL = "http://192.168.1.146:5001"
@@ -102,7 +102,7 @@ Antigravity (which absorbed Gemini CLI) reads MCP servers from
   "mcpServers": {
     "agentic-sls": {
       "command": "node",
-      "args": ["/path/to/repo/plugin/scripts/launch.cjs"],
+      "args": ["/path/to/repo/services/plugins/mcp/scripts/launch.cjs"],
       "env": { "INOVA_API_BASE_URL": "http://192.168.1.146:5001" }
     }
   }

@@ -27,7 +27,7 @@ interface PluginHooks {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
 const skillsDirs = [
-  path.join(repoRoot, 'plugin', 'skills'),
+  path.join(repoRoot, 'mcp', 'skills'),
 ];
 
 export const AgenticSlsPlugin = async (_ctx: PluginContext): Promise<PluginHooks> => {
@@ -39,7 +39,7 @@ export const AgenticSlsPlugin = async (_ctx: PluginContext): Promise<PluginHooks
       // recoater passes, layer overrides via the Inova-API-Plugin on :5001.
       config.mcp['agentic-sls'] = {
         type: 'local',
-        command: ['node', path.join(repoRoot, 'plugin', 'scripts', 'launch.cjs')],
+        command: ['node', path.join(repoRoot, 'mcp', 'scripts', 'launch-local.cjs')],
         enabled: true,
       };
 

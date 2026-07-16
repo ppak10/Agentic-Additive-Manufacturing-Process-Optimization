@@ -22,7 +22,8 @@ function knowledgeDir(): string {
   if (process.env.KNOWLEDGE_DIR) return process.env.KNOWLEDGE_DIR;
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(
-    here, "..", "..", "..", "datasets", "Agentic-SLS-Knowledge", "source");
+    here, "..", "..", "..", "..", "..",
+    "datasets", "Agentic-SLS-Knowledge", "source");
 }
 
 interface DocMeta {

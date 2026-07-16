@@ -2,7 +2,7 @@
   "mcpServers": {
     "agentic-sls": {
       "command": "node",
-      "args": ["plugin/scripts/launch-local.cjs"]
+      "args": ["mcp/scripts/launch-local.cjs"]
     }
   }
 }

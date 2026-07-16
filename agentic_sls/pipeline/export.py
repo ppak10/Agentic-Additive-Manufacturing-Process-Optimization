@@ -9,8 +9,10 @@ Output layout:
                                               unit/description across runs)
   <dataset>/source/telemetry/{build_id:03d}.parquet
   <dataset>/source/position_hf/{build_id:03d}.parquet
-  <repo>/mappings/build_to_inova_session.csv (sidecar; hand-reviewed linkage,
-                                              authoritative in the MAIN repo)
+  <Database dataset>/source/build_to_inova_session.csv
+                                (sidecar; hand-reviewed linkage — lives beside
+                                 the PrintSessions it annotates and publishes
+                                 the matching evidence with the dataset)
 
 Idempotent:
   - Existing parquet files are skipped unless --force.
@@ -328,7 +330,8 @@ def main() -> int:
     ap.add_argument("--dataset", type=Path,
                     default=REPO / "datasets" / "Agentic-SLS-Telemetry",
                     help="Telemetry dataset checkout (jsonl+parquet land in its source/)")
-    ap.add_argument("--mappings-dir", type=Path, default=REPO / "mappings",
+    ap.add_argument("--mappings-dir", type=Path,
+                    default=REPO / "datasets" / "Agentic-SLS-Database" / "source",
                     help="Output directory (default: data/exports)")
     ap.add_argument("--include-active", action="store_true",
                     help="Include the currently-open build (ended_at IS NULL)")
@@ -375,7 +378,7 @@ def main() -> int:
 
         observed = collect_sensor_pairs(conn)
         n = update_build_session_csv(conn, args.mappings_dir)
-        print(f"  mappings/build_to_inova_session.csv: {n} rows (all builds)")
+        print(f"  Database/source/build_to_inova_session.csv: {n} rows (all builds)")
         n = update_sensors_csv(recorder, observed)
         print(f"  recorder/sensors.csv: {n} rows (all sensors)")
 

@@ -9,10 +9,13 @@ plane / learning loop; the wiki also holds the topical reference pages).
 
 - `server/` — Fastify recorder (:3000): telemetry/frames/position → NVMe
   spool → Postgres import; build lifecycle; registry API (`/api/registry`).
-- `plugin/` — TypeScript MCP server (npm `@ppak10/agentic-sls-mcp`):
-  7 printer-control + 7 knowledge tools, identical for all four harnesses
-  (Claude Code, OpenCode, Codex, Antigravity `agy`). Tool registry and
-  ground rules: `plugin/AGENTS.md`.
+- `services/plugins/` — the harness-facing project root (all four CLIs
+  spawn with this as cwd, so each harness's native discovery — `.mcp.json`,
+  `.claude-plugin/`, `.opencode/`, `gemini-extension.json`, `.agents/` —
+  anchors here, not the dev repo). `mcp/` inside is the TypeScript MCP
+  server (npm `@ppak10/agentic-sls-mcp`): 7 printer-control + 7 knowledge
+  tools, identical for all four harnesses (Claude Code, OpenCode, Codex,
+  Antigravity `agy`). Ground rules: `services/plugins/AGENTS.md`.
 - `harness/` — uniform headless driver (`run.ts`), chat broker
   (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill.
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
@@ -54,19 +57,24 @@ Logs: `journalctl --user -u agentic-recorder -f`.
 - **HF dataset repos**: Agentic-SLS-{Telemetry,Database,ASTM,Conversations}
   are submodules under `datasets/` (Telemetry is 566 GB; all have
   `update = none` — NEVER blanket `--recurse-submodules`; init submodules
-  explicitly; hf.co remotes need the HF SSH key). All read from
-  `data/exports/` by relative path. Raw agent transcripts write DIRECTLY
+  explicitly; hf.co remotes need the HF SSH key). Source-based since
+  2026-07-16: `sls-export` writes into Telemetry `source/`, the linkage
+  CSV lives in Database `source/`, `sls-export-conversations` writes the
+  Conversations `data/` file directly; `data/exports/` is retired
+  (folder remains as fallback until the frames backfill completes). Raw agent transcripts write DIRECTLY
   into datasets/Agentic-SLS-Conversations/source/sessions (commit that
   repo often). (Datasets renamed Inova-Mk1-* → Agentic-SLS-* 2026-07-16;
   the old "Coversations" remote typo died in the rename.)
 - Old-era (pre-2026-07-13-restore) raw telemetry lives only in
-  `data/exports/telemetry/*.parquet`, not Postgres — summarize from
-  parquet, never `--source postgres` for big builds (fetch too slow).
+  `Agentic-SLS-Telemetry/source/telemetry/*.parquet` (pushed to HF), not
+  Postgres — summarize from parquet, never `--source postgres` for big
+  builds (fetch too slow).
 
 ## Commands
 
 - Tests: `uv run pytest` (root) · `npm test` + `npm run typecheck` +
-  `npx tsx tests/smoke.ts` (plugin/, needs DATABASE_URL exported).
+  `npx tsx tests/smoke.ts` (services/plugins/mcp/, needs DATABASE_URL
+  exported).
 - Headless agent run: `npx tsx harness/run.ts <harness> --prompt '…'`.
 - Post-print refresh: `sls-export` → `sls-summarize-builds` →
   (new sessions?) rsync `ppak@inova:/home/ppak/SLS4All/PrintSessions/`
@@ -84,7 +92,9 @@ Logs: `journalctl --user -u agentic-recorder -f`.
 - codex exec needs `--dangerously-bypass-approvals-and-sandbox` for MCP
   (openai/codex#16685); agy reads MCP config ONLY from
   `~/.gemini/config/mcp_config.json`; analyst-preset chats deny Claude's
-  Bash/Edit/Write (built-ins aren't restricted by `--allowedTools`).
+  Bash/Edit/Write (built-ins aren't restricted by `--allowedTools`);
+  harness CLIs run with cwd=services/plugins/ (re-register Claude's
+  plugin marketplace from that path after moves).
 - Profile names can lie (a "20mJ/mm" profile contains 15) — read the JSON
   field, never the name.
 - One firmware PrintSession can span multiple recorder builds (restarts);

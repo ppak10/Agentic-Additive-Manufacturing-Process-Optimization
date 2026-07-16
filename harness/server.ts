@@ -39,6 +39,7 @@ import {
 } from "./store.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PLUGINS_ROOT = path.join(REPO, "services", "plugins");
 const PORT = Number(process.env.AGENT_BROKER_PORT ?? 3100);
 
 // Load repo .env (DATABASE_URL etc.) the same way launch-local.cjs does.
@@ -183,7 +184,7 @@ function runTurn(
 ): Promise<{ res: TurnResult; stdout: string; stderr: string }> {
   const cmd = buildCmd(chat, message);
   const child = spawn(cmd[0], cmd.slice(1), {
-    cwd: REPO,
+    cwd: PLUGINS_ROOT,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
