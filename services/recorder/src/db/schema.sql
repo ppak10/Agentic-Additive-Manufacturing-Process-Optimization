@@ -86,6 +86,29 @@ CREATE TABLE IF NOT EXISTS calibrations (
 );
 CREATE INDEX IF NOT EXISTS calibrations_kind_idx ON calibrations (kind, id DESC);
 
+-- Curated training labels for the defect model (Telemetry dataset lab).
+-- MUTABLE by design (status flips, notes) — unlike events, labels are
+-- curated artifacts, not records. Sources: live (Mission Control verdict),
+-- replay (mock inference on archived frames), manual (drawn region).
+-- Exported per-build to the Telemetry dataset via sls-export-labels.
+CREATE TABLE IF NOT EXISTS defect_labels (
+  id              BIGSERIAL PRIMARY KEY,
+  build_id        BIGINT NOT NULL,
+  layer           INT,
+  ts              TIMESTAMPTZ,
+  frame_ids       BIGINT[],
+  class           TEXT NOT NULL,
+  bbox            DOUBLE PRECISION[],
+  polarity        TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  source          TEXT NOT NULL,
+  defect_event_id BIGINT,
+  note            TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS defect_labels_build_idx ON defect_labels (build_id, status);
+
 CREATE TABLE IF NOT EXISTS recording_health_events (
   id          BIGSERIAL PRIMARY KEY,
   ts          TIMESTAMPTZ NOT NULL DEFAULT now(),

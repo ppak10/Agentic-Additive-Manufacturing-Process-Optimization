@@ -325,54 +325,280 @@ async function recordDefectFeedback(body: {
       : Object.fromEntries(classes);
     latest.feedback = { ...latest.feedback, ...entries };
   }
+  // live verdicts double as curated training labels (correct→positive,
+  // incorrect→negative; 'ignored' is deliberately neither)
+  for (const [cls, v] of classes) {
+    if (v !== "correct" && v !== "incorrect") continue;
+    await pool
+      .query(
+        `INSERT INTO defect_labels (build_id, layer, ts, class, bbox, polarity, source, defect_event_id)
+         VALUES ($1, $2, now(), $3, $4, $5, 'live', $6)`,
+        [orig.build_id, orig.payload.layer ?? null, cls, blob?.bbox ?? null,
+         v === "correct" ? "positive" : "negative", eventId],
+      )
+      .catch((err) => log(`label insert failed: ${err.message}`));
+  }
   log(`feedback on event ${eventId}: ${summary}`);
   return { ok: true };
 }
 
+// ---- replay inference + labels CRUD (Telemetry dataset lab) ----------------
+
+// Mock inference on ARCHIVED frames: fetch each frame image from the
+// recorder by id, ship to the model server, return the verdict WITHOUT
+// writing a defect_detection event — replay scoring is an analysis act,
+// not telemetry.
+async function replayInference(body: {
+  build_id?: number;
+  chamber_frame_ids?: number[];
+  galvo_frame_ids?: number[];
+  prev_scan_frame_id?: number | null;
+}): Promise<{ status: number; json: unknown }> {
+  const chamberIds = body.chamber_frame_ids ?? [];
+  if (chamberIds.length === 0) return { status: 400, json: { error: "chamber_frame_ids required" } };
+  const fetchFrame = async (id: number): Promise<string | null> => {
+    try {
+      const r = await fetch(`${RECORDER_BASE_URL}/api/frames/${id}`, { signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return null;
+      return Buffer.from(await r.arrayBuffer()).toString("base64");
+    } catch {
+      return null;
+    }
+  };
+  const chamber = (await Promise.all(chamberIds.map(fetchFrame))).filter((x): x is string => x !== null);
+  const galvo = (await Promise.all((body.galvo_frame_ids ?? []).map(fetchFrame))).filter(
+    (x): x is string => x !== null,
+  );
+  const prev = body.prev_scan_frame_id != null ? await fetchFrame(body.prev_scan_frame_id) : null;
+  if (chamber.length === 0) return { status: 404, json: { error: "no archived frames found for those ids" } };
+  const r = await fetch(`${DEFECT_MODEL_URL}/infer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      build_id: body.build_id ?? null,
+      layer: null,
+      chamber_frames: chamber,
+      galvo_frames: galvo,
+      prev_scan_frame: prev,
+    }),
+    signal: AbortSignal.timeout(INFER_TIMEOUT_MS),
+  });
+  if (!r.ok) return { status: 502, json: { error: `model server ${r.status}` } };
+  return { status: 200, json: { ...(await r.json()) as object, frames_used: { chamber: chamber.length, galvo: galvo.length, prev: prev != null } } };
+}
+
+async function listLabels(buildId: number) {
+  const { rows } = await pool.query(
+    `SELECT id, build_id, layer, ts, frame_ids, class, bbox, polarity, status,
+            source, defect_event_id, note, created_at, updated_at
+     FROM defect_labels WHERE build_id = $1 ORDER BY id DESC`,
+    [buildId],
+  );
+  return rows;
+}
+
+async function createLabel(body: Record<string, unknown>): Promise<{ status: number; json: unknown }> {
+  const { build_id, layer, ts, frame_ids, bbox, polarity, source, note } = body;
+  const cls = body.class;
+  if (!build_id || !cls || !polarity || !source) {
+    return { status: 400, json: { error: "build_id, class, polarity, source required" } };
+  }
+  if (!["positive", "negative"].includes(String(polarity))) {
+    return { status: 400, json: { error: "polarity must be positive|negative" } };
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO defect_labels (build_id, layer, ts, frame_ids, class, bbox, polarity, source, defect_event_id, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [build_id, layer ?? null, ts ?? null, frame_ids ?? null, cls, bbox ?? null,
+     polarity, source, body.defect_event_id ?? null, note ?? null],
+  );
+  return { status: 200, json: rows[0] };
+}
+
+async function patchLabel(id: number, body: { status?: string; note?: string }): Promise<{ status: number; json: unknown }> {
+  if (body.status && !["active", "rejected"].includes(body.status)) {
+    return { status: 400, json: { error: "status must be active|rejected" } };
+  }
+  const { rows } = await pool.query(
+    `UPDATE defect_labels SET
+       status = coalesce($2, status),
+       note = coalesce($3, note),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, body.status ?? null, body.note ?? null],
+  );
+  if (rows.length === 0) return { status: 404, json: { error: "no such label" } };
+  return { status: 200, json: rows[0] };
+}
+
+// ---- anomaly triage queue (Labeling page) -----------------------------------
+// Candidates come from sls-analyze-build (CV suspicion sort); the human
+// dismisses or labels them. Labeling creates a defect_labels row and back-
+// links it on the candidate.
+
+async function listAnomalies(params: URLSearchParams) {
+  const where: string[] = [];
+  const vals: unknown[] = [];
+  const status = params.get("status") ?? "pending";
+  vals.push(status);
+  where.push(`status = $${vals.length}`);
+  const buildId = params.get("build_id");
+  if (buildId) {
+    vals.push(Number(buildId));
+    where.push(`build_id = $${vals.length}`);
+  }
+  const { rows } = await pool.query(
+    `SELECT id, build_id, layer, frame_id, ts, bbox, score, method, status, label_id
+     FROM anomaly_candidates WHERE ${where.join(" AND ")}
+     ORDER BY build_id DESC, frame_id, score DESC LIMIT 5000`,
+    vals,
+  );
+  return rows;
+}
+
+async function patchAnomaly(id: number, body: { status?: string; label_id?: number }) {
+  if (body.status && !["pending", "dismissed", "labeled"].includes(body.status)) {
+    return { status: 400, json: { error: "bad status" } };
+  }
+  const { rows } = await pool.query(
+    `UPDATE anomaly_candidates SET
+       status = coalesce($2, status),
+       label_id = coalesce($3, label_id),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, body.status ?? null, body.label_id ?? null],
+  );
+  if (rows.length === 0) return { status: 404, json: { error: "no such candidate" } };
+  return { status: 200, json: rows[0] };
+}
+
+async function dismissAnomalies(ids: number[]) {
+  if (!Array.isArray(ids) || ids.length === 0) return { status: 400, json: { error: "ids required" } };
+  const { rowCount } = await pool.query(
+    `UPDATE anomaly_candidates SET status='dismissed', updated_at=now()
+     WHERE id = ANY($1::bigint[]) AND status='pending'`,
+    [ids],
+  );
+  return { status: 200, json: { dismissed: rowCount } };
+}
+
+// Neighboring chamber frames around a flagged frame — the triage page's
+// context scrubber (is that debris real, or a lighting flicker on ONE
+// frame?). Returns ids ordered by time with the center index.
+async function frameContext(params: URLSearchParams) {
+  const frameId = Number(params.get("frame_id"));
+  const span = Math.min(25, Number(params.get("span")) || 10);
+  if (!Number.isFinite(frameId)) return { status: 400, json: { error: "frame_id required" } };
+  const { rows: center } = await pool.query<{ build_id: string; ts: Date }>(
+    `SELECT build_id, ts FROM frames WHERE id = $1`, [frameId],
+  );
+  if (!center[0]) return { status: 404, json: { error: "no such frame" } };
+  const { build_id, ts } = center[0];
+  const [before, after] = await Promise.all([
+    pool.query<{ id: string }>(
+      `SELECT id FROM frames WHERE build_id=$1 AND kind='chamber' AND ts < $2
+       ORDER BY ts DESC LIMIT $3`, [build_id, ts, span],
+    ),
+    pool.query<{ id: string }>(
+      `SELECT id FROM frames WHERE build_id=$1 AND kind='chamber' AND ts > $2
+       ORDER BY ts ASC LIMIT $3`, [build_id, ts, span],
+    ),
+  ]);
+  const ids = [
+    ...before.rows.map((r) => Number(r.id)).reverse(),
+    frameId,
+    ...after.rows.map((r) => Number(r.id)),
+  ];
+  return { status: 200, json: { ids, center: before.rows.length } };
+}
+
 // ---- tiny HTTP surface --------------------------------------------------------
-const server = http.createServer((req, res) => {
-  res.setHeader("content-type", "application/json");
-  // "/defect/*" aliases are the same endpoints reached through the web
-  // proxy (vite maps /defect → :3200 without stripping the prefix).
-  if (req.method === "POST" && (req.url === "/feedback" || req.url === "/defect/feedback")) {
+// "/defect/*" aliases are the same endpoints reached through the web proxy
+// (vite maps /defect -> :3200 without stripping the prefix).
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
-      void (async () => {
-        try {
-          const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-          const result = await recordDefectFeedback(body);
-          res.statusCode = result.ok ? 200 : 400;
-          res.end(JSON.stringify(result));
-        } catch (err) {
-          res.statusCode = 500;
-          res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
-        }
-      })();
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString() || "{}"));
+      } catch (err) {
+        reject(err);
+      }
     });
-    return;
-  }
-  if (req.url === "/health" || req.url === "/defect/health") {
-    res.end(
-      JSON.stringify({
-        status: "ok",
-        model_url: DEFECT_MODEL_URL,
-        model_reachable: modelReachable,
-        recording,
-        build_id: buildId,
-        phase,
-        layer,
-        buffered: { chamber: chamberBuf.length, galvo: galvoBuf.length },
-        last_error: lastError,
-        last_result_ts: latest?.ts ?? null,
-      }),
-    );
-  } else if (req.url === "/defect/latest") {
-    res.end(JSON.stringify(latest));
-  } else {
-    res.statusCode = 404;
-    res.end(JSON.stringify({ error: "not found" }));
-  }
+  });
+}
+
+const server = http.createServer((req, res) => {
+  res.setHeader("content-type", "application/json");
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const path = url.pathname.replace(/^\/defect(?=\/|$)/, "") || "/";
+  const send = (status: number, json: unknown) => {
+    res.statusCode = status;
+    res.end(JSON.stringify(json));
+  };
+  void (async () => {
+    try {
+      if (req.method === "POST" && path === "/feedback") {
+        const result = await recordDefectFeedback(await readBody(req));
+        return send(result.ok ? 200 : 400, result);
+      }
+      if (req.method === "POST" && path === "/replay") {
+        const r = await replayInference(await readBody(req));
+        return send(r.status, r.json);
+      }
+      if (req.method === "GET" && path === "/frames/context") {
+        const r = await frameContext(url.searchParams);
+        return send(r.status, r.json);
+      }
+      if (req.method === "GET" && path === "/anomalies") {
+        return send(200, await listAnomalies(url.searchParams));
+      }
+      if (req.method === "PATCH" && /^\/anomalies\/\d+$/.test(path)) {
+        const id = Number(path.split("/")[2]);
+        const r = await patchAnomaly(id, (await readBody(req)) as { status?: string; label_id?: number });
+        return send(r.status, r.json);
+      }
+      if (req.method === "POST" && path === "/anomalies/dismiss") {
+        const r = await dismissAnomalies(((await readBody(req)) as { ids?: number[] }).ids ?? []);
+        return send(r.status, r.json);
+      }
+      if (req.method === "GET" && path === "/labels") {
+        const buildId = Number(url.searchParams.get("build_id"));
+        if (!Number.isFinite(buildId)) return send(400, { error: "build_id required" });
+        return send(200, await listLabels(buildId));
+      }
+      if (req.method === "POST" && path === "/labels") {
+        const r = await createLabel(await readBody(req));
+        return send(r.status, r.json);
+      }
+      if (req.method === "PATCH" && /^\/labels\/\d+$/.test(path)) {
+        const id = Number(path.split("/")[2]);
+        const r = await patchLabel(id, (await readBody(req)) as { status?: string; note?: string });
+        return send(r.status, r.json);
+      }
+      if (req.method === "GET" && path === "/health") {
+        return send(200, {
+          status: "ok",
+          model_url: DEFECT_MODEL_URL,
+          model_reachable: modelReachable,
+          recording,
+          build_id: buildId,
+          phase,
+          layer,
+          buffered: { chamber: chamberBuf.length, galvo: galvoBuf.length },
+          last_error: lastError,
+          last_result_ts: latest?.ts ?? null,
+        });
+      }
+      if (req.method === "GET" && path === "/latest") {
+        return send(200, latest);
+      }
+      return send(404, { error: "not found" });
+    } catch (err) {
+      return send(500, { error: (err as Error).message });
+    }
+  })();
 });
 
 server.listen(PORT, () => log(`defect bridge listening on :${PORT} → ${DEFECT_MODEL_URL}`));

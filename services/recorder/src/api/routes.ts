@@ -303,6 +303,39 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   };
 
+  // Per-dataset stats for the GUI's Datasets pages. Big tables (telemetry,
+  // frames, position_hf, agent_messages) use pg_class reltuples ESTIMATES —
+  // exact count(*) over telemetry takes minutes and once wedged the old
+  // /api/summary consumer. Small tables get exact counts.
+  app.get("/api/datasets/summary", async () => {
+    const est = async (table: string): Promise<number> => {
+      const { rows } = await pool.query(
+        `SELECT reltuples::bigint AS n FROM pg_class WHERE relname = $1`, [table],
+      );
+      return Math.max(0, Number(rows[0]?.n ?? 0));
+    };
+    const exact = async (table: string): Promise<number> => {
+      const { rows } = await pool.query(`SELECT count(*) AS n FROM ${table}`);
+      return Number(rows[0]?.n ?? 0);
+    };
+    const [builds, events, ticksEst, framesEst, positionEst,
+           jobs, profiles, printSessions, specimens,
+           conversations, sessions, selections, messagesEst, convBuilds] =
+      await Promise.all([
+        exact("builds"), exact("events"), est("telemetry"), est("frames"), est("position_hf"),
+        exact("inova_jobs"), exact("inova_print_profiles"), exact("inova_print_sessions"),
+        exact("astm_specimens"),
+        exact("agent_conversations"), exact("agent_sessions"), exact("agent_selections"),
+        est("agent_messages"), exact("conversation_builds"),
+      ]);
+    return {
+      telemetry: { builds, events, ticks_est: ticksEst, frames_est: framesEst, position_est: positionEst },
+      database: { jobs, profiles, print_sessions: printSessions },
+      astm: { specimens },
+      conversations: { conversations, sessions, selections, messages_est: messagesEst, conversation_builds: convBuilds },
+    };
+  });
+
   // Operator calibrations (append-only; latest per kind wins). The web's
   // Align mode POSTs here; feedback.ts reads the same rows for the
   // build_layout/camera_bboxes projection. GET returns the current row.

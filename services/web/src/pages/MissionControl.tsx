@@ -4,6 +4,7 @@ import { useBedMatrix } from "@/hooks/useBedMatrix";
 import { plasma, matrixStats } from "@/lib/thermal";
 import { useCameraStream } from "@/hooks/useCameraStream";
 import { useDefectWatch, type DefectBlob } from "@/hooks/useDefectWatch";
+import { DEFECT_COLORS, DEFECT_ALPHA_FLOOR, extractBlobs } from "@/lib/defects";
 import { PanelConsole } from "@/components/PanelConsole";
 import { JobPanel } from "@/panels/JobPanel";
 import type { JobStatus } from "@/hooks/useJob";
@@ -22,6 +23,19 @@ import {
 import { ConfirmModal } from "@/panels/BuildLayoutPanel";
 import { useLayerSlices } from "@/hooks/useLayerSlices";
 import { cn } from "@/lib/utils";
+import {
+  CAM_W,
+  CAM_H,
+  BED_CAM,
+  ALIGN_MARGIN,
+  DEFAULT_QUAD,
+  QUAD_KEY,
+  homography,
+  projector,
+  loadCalib,
+  saveCalib,
+  type Quad,
+} from "@/lib/projection";
 
 // Mission Control: the streamlined operator console. Top = the Inova feed
 // (chamber / thermal / galvo, no card chrome); middle = the attention bar
@@ -37,8 +51,6 @@ import { cn } from "@/lib/utils";
 //     SafeWorkingArea (bed in camera px): x 105-545, y 113-547
 //   Mlx90640Camera.MainBox (bed in thermal px, 32x24 sensor): x 10-24, y 9-23
 // The thermal canvas is cropped to MainBox and pinned over SafeWorkingArea.
-const CAM_W = 650, CAM_H = 600;
-const BED_CAM = { left: 105 / CAM_W, top: 113 / CAM_H, width: (545 - 105) / CAM_W, height: (547 - 113) / CAM_H };
 const BED_THERM = { sx: 10, sy: 9, sw: 15, sh: 15 }; // MainBox, inclusive
 // Full 32x24 matrix placement, extrapolated from the MainBox<->SafeWorkingArea
 // correspondence (same px scale, no crop): overlay extends past the stage and
@@ -70,172 +82,6 @@ const THERMAL_T_SEED: Quad = [
 // from the plotter's unit square to a user-aligned quadrilateral in image
 // coords — the operator drags the four corners ("Align" mode) until the
 // outlines sit on the actual scan marks; corners persist in localStorage.
-type Quad = [[number, number], [number, number], [number, number], [number, number]];
-const QUAD_KEY = "agentic-sls.plotter-quad";
-// While aligning, the overlay workspace extends this far beyond the image
-// on every side so quad corners (especially the bottom two) can be dragged
-// past the frame edge — a perspective quad's corners often live there.
-const ALIGN_MARGIN = 0.2;
-// corners in plotter order (0,0) (1,0) (1,1) (0,1); default = the flat bed rect
-const DEFAULT_QUAD: Quad = [
-  [BED_CAM.left, BED_CAM.top],
-  [BED_CAM.left + BED_CAM.width, BED_CAM.top],
-  [BED_CAM.left + BED_CAM.width, BED_CAM.top + BED_CAM.height],
-  [BED_CAM.left, BED_CAM.top + BED_CAM.height],
-];
-
-function loadCalib(): { quad: Quad; k1: number } {
-  try {
-    const c = JSON.parse(localStorage.getItem(QUAD_KEY) ?? "");
-    // legacy format: bare 4-corner array (pre-fisheye)
-    if (Array.isArray(c) && c.length === 4) return { quad: c as Quad, k1: 0 };
-    if (Array.isArray(c?.quad) && c.quad.length === 4) {
-      return { quad: c.quad as Quad, k1: Number(c.k1) || 0 };
-    }
-  } catch { /* fall through */ }
-  // no browser-local calibration — fall back to the checked-in env values
-  // (repo .env: VITE_PLOTTER_QUAD / VITE_PLOTTER_FISHEYE; use the align
-  // toolbar's "Copy .env" button to produce them)
-  try {
-    const q = JSON.parse((import.meta.env.VITE_PLOTTER_QUAD as string | undefined) ?? "");
-    if (Array.isArray(q) && q.length === 4) {
-      return { quad: q as Quad, k1: Number(import.meta.env.VITE_PLOTTER_FISHEYE) || 0 };
-    }
-  } catch { /* fall through */ }
-  return { quad: DEFAULT_QUAD, k1: 0 };
-}
-
-function saveCalib(quad: Quad, k1: number): void {
-  try {
-    localStorage.setItem(QUAD_KEY, JSON.stringify({ quad, k1, savedAt: Date.now() }));
-  } catch { /* private mode etc. */ }
-  // authoritative shared store: calibrations table (append-only, latest
-  // wins). 404s harmlessly until the recorder deploys the endpoint.
-  void fetch("/api/calibration/plotter_to_camera", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      payload: { quad, k1, model: "heckbert-homography + radial k1, corners-pinned, aspect-corrected" },
-      source: "mission-control-align",
-    }),
-  }).catch(() => {});
-}
-
-// Projective map (u,v) in [0,1]² → image coords, from the classic
-// square-to-quad closed form (Heckbert). Degenerates cleanly to affine
-// when the quad is a parallelogram.
-function homography(q: Quad): (u: number, v: number) => [number, number] {
-  const [[x1, y1], [x2, y2], [x3, y3], [x4, y4]] = q;
-  const dx1 = x2 - x3, dx2 = x4 - x3, dx3 = x1 - x2 + x3 - x4;
-  const dy1 = y2 - y3, dy2 = y4 - y3, dy3 = y1 - y2 + y3 - y4;
-  let g = 0, h = 0;
-  const den = dx1 * dy2 - dy1 * dx2;
-  if ((dx3 !== 0 || dy3 !== 0) && den !== 0) {
-    g = (dx3 * dy2 - dy3 * dx2) / den;
-    h = (dx1 * dy3 - dy1 * dx3) / den;
-  }
-  const a = x2 - x1 + g * x2, b = x4 - x1 + h * x4, c = x1;
-  const d = y2 - y1 + g * y2, e = y4 - y1 + h * y4, f = y1;
-  return (u, v) => {
-    const w = g * u + h * v + 1;
-    return [(a * u + b * v + c) / w, (d * u + e * v + f) / w];
-  };
-}
-
-// Homography + radial (fisheye) term. The lens bows straight lines around
-// the optical axis (image center), so after the projective map we scale
-// each point radially by (1 + k1·r²) — NORMALIZED at the quad corners'
-// mean radius, so the slider bows the middle of the bed while the corners
-// the operator placed stay pinned (corners set the frame, k1 sets the
-// bow — independent controls). r² is computed aspect-corrected so the
-// distortion is circular on the physical sensor, not the stretched
-// normalized square.
-function projector(q: Quad, k1: number): (u: number, v: number) => [number, number] {
-  const H = homography(q);
-  if (k1 === 0) return H;
-  const A = CAM_W / CAM_H;
-  const r2 = (x: number, y: number) => {
-    const dx = (x - 0.5) * A, dy = y - 0.5;
-    return dx * dx + dy * dy;
-  };
-  const rref = q.reduce((s, [x, y]) => s + r2(x, y), 0) / 4;
-  return (u, v) => {
-    const [x, y] = H(u, v);
-    const m = (1 + k1 * r2(x, y)) / (1 + k1 * rref);
-    return [0.5 + (x - 0.5) * m, 0.5 + (y - 0.5) * m];
-  };
-}
-
-// Defect anomaly-map overlay: per-class tint colors (distinct against both
-// the plasma temperature digits and the grayscale chamber view).
-const DEFECT_COLORS: Record<string, [number, number, number]> = {
-  recoater_hopping: [255, 127, 14], // orange
-  recoater_streaking: [255, 223, 0], // yellow
-  incomplete_spreading: [228, 26, 28], // red
-  swelling: [152, 78, 163], // purple
-  debris: [0, 229, 255], // cyan
-  super_elevation: [255, 0, 255], // magenta
-};
-// Hide sub-threshold wash — 0.35 is the model's own alert threshold.
-const DEFECT_ALPHA_FLOOR = 0.35;
-
-// Connected-component blobs from one class's decoded anomaly map, so the
-// operator can verdict a SPECIFIC region instead of the whole frame.
-// 4-connected flood fill over the thresholded grid; keeps the 8 largest
-// above a speckle floor. Coordinates normalized 0..1 of the map (= the
-// full chamber frame).
-const MIN_BLOB_AREA = 20; // map px
-function extractBlobs(
-  px: Uint8ClampedArray,
-  w: number,
-  h: number,
-  cls: string,
-): DefectBlob[] {
-  const thr = Math.round(DEFECT_ALPHA_FLOOR * 255);
-  const seen = new Uint8Array(w * h);
-  const blobs: DefectBlob[] = [];
-  for (let i = 0; i < w * h; i++) {
-    if (seen[i] || px[i * 4]! < thr) continue;
-    seen[i] = 1;
-    const stack = [i];
-    let head = 0;
-    let x0 = w, y0 = h, x1 = 0, y1 = 0, area = 0, peak = 0, sx = 0, sy = 0;
-    while (head < stack.length) {
-      const j = stack[head++]!;
-      const x = j % w, y = (j / w) | 0;
-      area++;
-      sx += x;
-      sy += y;
-      const p = px[j * 4]!;
-      if (p > peak) peak = p;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-      const tryPush = (n: number) => {
-        if (!seen[n] && px[n * 4]! >= thr) {
-          seen[n] = 1;
-          stack.push(n);
-        }
-      };
-      if (x > 0) tryPush(j - 1);
-      if (x < w - 1) tryPush(j + 1);
-      if (y > 0) tryPush(j - w);
-      if (y < h - 1) tryPush(j + w);
-    }
-    if (area < MIN_BLOB_AREA) continue;
-    const cx = sx / area / w, cy = sy / area / h;
-    blobs.push({
-      key: `${cls}@${cx.toFixed(2)},${cy.toFixed(2)}`,
-      class: cls,
-      bbox: [x0 / w, y0 / h, (x1 + 1) / w, (y1 + 1) / h],
-      centroid: [cx, cy],
-      area_px: area,
-      peak: peak / 255,
-    });
-  }
-  return blobs.sort((a, b) => b.area_px - a.area_px).slice(0, 8);
-}
 
 function ChamberThermalPane({ phase }: { phase: string | null }) {
   // object overlays are meaningful only while layers print — PrintCap,

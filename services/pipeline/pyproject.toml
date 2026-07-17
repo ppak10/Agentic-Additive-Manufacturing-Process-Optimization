@@ -9,6 +9,8 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
+    "opencv-python-headless>=4.10",
+    "numpy>=1.26",
 ]
 
 [project.urls]
@@ -27,6 +29,9 @@ sls-restore-builds = "agentic_sls.pipeline.restore_builds:main"
 sls-deliver-frames = "agentic_sls.pipeline.deliver_frames:main"
 sls-deliver-spool = "agentic_sls.pipeline.deliver_spool:main"
 sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
+sls-export-labels = "agentic_sls.pipeline.export_labels:main"
+sls-backfill-camera-bboxes = "agentic_sls.pipeline.backfill_camera_bboxes:main"
+sls-analyze-build = "agentic_sls.pipeline.analyze_build:main"
 
 [build-system]
 requires = ["setuptools>=68"]

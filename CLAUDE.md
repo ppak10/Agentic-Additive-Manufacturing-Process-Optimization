@@ -50,7 +50,7 @@ plane / learning loop; the wiki also holds the topical reference pages).
 - `services/pipeline/` — Python data pipeline + its tests (own
   pyproject; root pyproject is a virtual uv-workspace stub. Console
   scripts, run from root:
-  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|deliver-frames|backfill-frames|restore-builds>`).
+  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|deliver-frames|backfill-frames|restore-builds|export-labels|backfill-camera-bboxes>`).
 - `datasets/Agentic-SLS-Knowledge/` — curated reference corpus served by
   `reference_*` tools (its `source/`). Published HF dataset; the submodule
   pin records which corpus version agents saw. MUST stay initialized
@@ -97,7 +97,14 @@ Logs: `docker logs -f agentic-sls-recorder`.
   object set, on version change, + derived `camera_bboxes` per object —
   chamber-image coords through the operator-measured homography),
   `defect_feedback` (verdicts from Mission Control via the defect
-  bridge). Coordinates stay NATIVE — calibration block in build_layout
+  bridge). **Training labels live in `defect_labels`** (MUTABLE table —
+  curation, not telemetry: status active/rejected, sources
+  live/replay/manual). GUI: Datasets → Telemetry → per-build label lab
+  (replay scrubber, mock inference via bridge `/defect/replay` — no
+  events written, blob verdicts + hand-drawn regions). Export:
+  `uv run sls-export-labels` → Telemetry `source/labels/<NNN>.parquet`
+  per build; all-rejected builds get their labels parquet PRUNED; HF push
+  stays a manual git commit (the human gate). Coordinates stay NATIVE — calibration block in build_layout
   does the projection downstream; it includes `plotter_to_camera`
   (quad + fisheye k1). Calibration source of truth: **`calibrations`
   table** (append-only, latest per kind wins — history matters for

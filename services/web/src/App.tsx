@@ -4,6 +4,8 @@ import {
   Activity,
   Bot,
   Boxes,
+  Database,
+  Tag,
   FlaskConical,
   Radar,
   Rss,
@@ -39,6 +41,9 @@ import { PowderTuning } from "@/pages/PowderTuning";
 import { Agents } from "@/pages/Agents";
 import { Services } from "@/pages/Services";
 import { MissionControl } from "@/pages/MissionControl";
+import { DatasetPage } from "@/pages/Datasets";
+import { TelemetryBuildLab } from "@/pages/TelemetryBuildLab";
+import { Labeling } from "@/pages/Labeling";
 import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
 import { useJob, type JobStatus } from "@/hooks/useJob";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
@@ -70,6 +75,22 @@ const NAV_GROUPS = [
     label: "Agents",
     items: [
       { to: "/agents", label: "Sessions", icon: Bot, end: false },
+    ],
+  },
+  {
+    label: "Labeling",
+    items: [
+      { to: "/labeling", label: "Triage", icon: Tag, end: false },
+    ],
+  },
+  {
+    label: "Datasets",
+    items: [
+      { to: "/datasets/telemetry", label: "Telemetry", icon: Database, end: false },
+      { to: "/datasets/database", label: "Database", icon: Database, end: false },
+      { to: "/datasets/astm", label: "ASTM", icon: Database, end: false },
+      { to: "/datasets/conversations", label: "Conversations", icon: Database, end: false },
+      { to: "/datasets/knowledge", label: "Knowledge", icon: Database, end: false },
     ],
   },
   {
@@ -186,6 +207,9 @@ function AppShell() {
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
+            <Route path="/labeling" element={<Labeling />} />
+            <Route path="/datasets/:slug" element={<DatasetPage />} />
+            <Route path="/datasets/telemetry/:buildId" element={<TelemetryBuildLab />} />
             <Route path="/services" element={<Services />} />
           </Routes>
         </main>
