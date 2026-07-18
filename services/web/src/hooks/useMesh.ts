@@ -51,14 +51,14 @@ function parseMeshBlob(buf: ArrayBuffer): THREE.BufferGeometry | null {
   return geo;
 }
 
-async function fetchMesh(hash: string): Promise<THREE.BufferGeometry | null> {
+async function fetchMesh(hash: string, url: string): Promise<THREE.BufferGeometry | null> {
   const cached = geometryCache.get(hash);
   if (cached) return cached;
   const pending = inflight.get(hash);
   if (pending) return pending;
   const p = (async () => {
     try {
-      const r = await fetch(`/api/printing/meshes/${encodeURIComponent(hash)}`);
+      const r = await fetch(url);
       if (!r.ok) return null;
       const buf = await r.arrayBuffer();
       const geo = parseMeshBlob(buf);
@@ -77,7 +77,13 @@ async function fetchMesh(hash: string): Promise<THREE.BufferGeometry | null> {
 // Returns the parsed geometry for a mesh hash, or null while loading /
 // unavailable. Renders are stable — same hash → same geometry object,
 // safe to pass to Three.js meshes directly.
-export function useMesh(hash: string | null): THREE.BufferGeometry | null {
+//
+// Without jobId the hash resolves via the live-print route
+// (/api/printing/meshes, mid-print only); with jobId it resolves via the
+// stored-job route (/api/jobs/:id/meshes), which works while idle. The
+// cache is keyed by hash alone — it's a content address, so both routes
+// return identical geometry.
+export function useMesh(hash: string | null, jobId?: string): THREE.BufferGeometry | null {
   const [geo, setGeo] = useState<THREE.BufferGeometry | null>(() =>
     hash ? geometryCache.get(hash) ?? null : null,
   );
@@ -92,14 +98,17 @@ export function useMesh(hash: string | null): THREE.BufferGeometry | null {
       setGeo(cached);
       return;
     }
+    const url = jobId
+      ? `/api/jobs/${encodeURIComponent(jobId)}/meshes/${encodeURIComponent(hash)}`
+      : `/api/printing/meshes/${encodeURIComponent(hash)}`;
     let cancelled = false;
-    void fetchMesh(hash).then((g) => {
+    void fetchMesh(hash, url).then((g) => {
       if (!cancelled) setGeo(g);
     });
     return () => {
       cancelled = true;
     };
-  }, [hash]);
+  }, [hash, jobId]);
 
   return geo;
 }

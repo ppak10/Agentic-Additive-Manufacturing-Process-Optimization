@@ -431,9 +431,10 @@ export function PrintProfiles() {
       <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0">
         {/* ── profile list ── */}
         <Card className="flex flex-col min-h-0">
+          {/* no "Profiles" title (breadcrumb covers it) — the header row
+              keeps only the new-profile action */}
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>Profiles</span>
+            <CardTitle className="flex items-center justify-end">
               <Button
                 size="icon"
                 variant="neutral"

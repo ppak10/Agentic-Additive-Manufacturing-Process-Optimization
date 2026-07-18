@@ -799,4 +799,38 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
     pluginProxy("DELETE", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
   );
+
+  // Stored-job nesting instances (chamber + per-instance transforms) — the
+  // off-print counterpart of /api/job/current/parts. Bare JSON like the other
+  // /jobs routes.
+  app.get<{ Params: { id: string } }>("/api/jobs/:id/instances", (req, reply) =>
+    pluginProxy("GET", `/jobs/${encodeURIComponent(req.params.id)}/instances`, undefined, reply),
+  );
+
+  // Stored-job mesh blob by content hash. Byte-passthrough like
+  // /api/printing/meshes/:hash — the browser hands the ArrayBuffer straight
+  // to Three.js.
+  app.get<{ Params: { id: string; hash: string } }>(
+    "/api/jobs/:id/meshes/:hash",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      try {
+        const r = await fetch(
+          `${config.INOVA_API_BASE_URL}/jobs/${encodeURIComponent(req.params.id)}/meshes/${encodeURIComponent(req.params.hash)}`,
+        );
+        if (r.status === 404 || r.status === 422) {
+          return reply.code(r.status).send(await r.json().catch(() => ({ error: "upstream" })));
+        }
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        const mime = r.headers.get("content-type") ?? "application/octet-stream";
+        return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
 }

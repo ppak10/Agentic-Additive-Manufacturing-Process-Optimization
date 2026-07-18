@@ -446,6 +446,56 @@ app.post<{ Params: { id: string }; Body: { message: string; context?: string } }
   },
 );
 
+// Conversation history — the sidebar's ChatGPT-style recents list and the
+// conversation viewer page. Candidates are internal (panel plumbing), so
+// they're excluded from the list but readable by id.
+app.get<{ Querystring: { limit?: string } }>("/agent/conversations", async (req, reply) => {
+  if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+  const limit = Math.min(50, Number(req.query.limit) || 20);
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.created_at, c.harness, c.role, c.model,
+              (SELECT left(m.content, 80) FROM agent_messages m
+               WHERE m.conversation_id = c.id AND m.kind IN ('user', 'event')
+                 AND m.content IS NOT NULL
+               ORDER BY m.turn, m.seq LIMIT 1) AS title,
+              (SELECT max(m.ts) FROM agent_messages m
+               WHERE m.conversation_id = c.id) AS last_at
+       FROM agent_conversations c
+       WHERE c.role <> 'panel:candidate'
+       ORDER BY coalesce((SELECT max(m.ts) FROM agent_messages m
+                          WHERE m.conversation_id = c.id), c.created_at) DESC
+       LIMIT $1`,
+      [limit],
+    );
+    return rows;
+  } catch (err) {
+    if ((err as { code?: string }).code === "42P01") return [];
+    throw err;
+  }
+});
+
+app.get<{ Params: { id: string } }>("/agent/conversations/:id", async (req, reply) => {
+  if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+  const id = Number(req.params.id);
+  const { rows } = await pool.query(
+    `SELECT id, created_at, harness, role, model, preset, build_id FROM agent_conversations WHERE id = $1`,
+    [id],
+  );
+  if (!rows[0]) return reply.code(404).send({ error: `no conversation ${id}` });
+  const { rows: messages } = await pool.query(
+    `SELECT turn, seq, ts, kind, content, tool_name, is_error, meta
+     FROM agent_messages WHERE conversation_id = $1
+     ORDER BY turn, seq LIMIT 3000`,
+    [id],
+  );
+  const { rows: builds } = await pool.query(
+    `SELECT build_id FROM conversation_builds WHERE conversation_id = $1 ORDER BY build_id`,
+    [id],
+  );
+  return { conversation: rows[0], messages, builds: builds.map((b) => Number(b.build_id)) };
+});
+
 // Session history — also serves the GUI's Agents page, so it needs no
 // recorder-side wiring at all.
 app.get("/agent/sessions", async (_req, reply) => {

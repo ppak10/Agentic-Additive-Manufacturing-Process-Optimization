@@ -29,7 +29,20 @@ plane / learning loop; the wiki also holds the topical reference pages).
   mode + HMR): Builds registry pages, Agents session browser, Mission
   Control (chamber card with thermal/defect/exclude-object overlays —
   click a part outline → confirm → exclude; PanelConsole agent chat; the
-  old right-docked sidebar chat is REMOVED).
+  old right-docked sidebar chat is REMOVED). UI = canonical neobrutalism
+  registry components ONLY (shadcn from neobrutalism.dev/r/<name>.json);
+  hand-roll simple table sort/paging — TanStack was deliberately removed.
+  App shell is capped `h-svh` (App.tsx SidebarInset) — LOAD-BEARING for
+  every page-internal scroll area; min-height alone makes pages overflow
+  the window. Pages portal page-scoped actions into the
+  `#breadcrumb-actions` slot in the breadcrumb row. Jobs page: selection
+  is route-backed via ONE optional-param route `/jobs/:id?` (two routes
+  would remount and lose sort/paging state); crumb label rides
+  `location.state.breadcrumb`; job card has a dual 3D build preview
+  (`panels/JobPreview3D.tsx` — whole nested build + selected part) fed by
+  the plugin's stored-job endpoints `/api/jobs/:id/instances` +
+  `/api/jobs/:id/meshes/:hash` (work while idle, unlike
+  `/api/printing/*`; deployed 2026-07-18).
 - `services/defect/` — defect-detection bridge (:3200): thin client of the
   v05 model server on the MAIL-10 workstation (`ssh 10`, serve.py :8100,
   GPU; started via `runs/v05/deploy.sh` with linuxbrew on PATH). Watches
@@ -158,6 +171,16 @@ Logs: `docker logs -f agentic-sls-recorder`.
   Bash/Edit/Write (built-ins aren't restricted by `--allowedTools`);
   harness CLIs run with cwd=services/plugins/ (re-register Claude's
   plugin marketplace from that path after moves).
+- Three.js chamber views (`BuildLayout3D`/`JobPreview3D`): firmware
+  transforms are row-major V·M — transpose for THREE; stored-job
+  `MeshPrintTransform` expects the mesh RECENTERED on its bounds
+  (apply `translate(−boundsCenter)` before the world matrix); invisible/
+  transparent materials MUST set `depthWrite={false}` (an opacity-0 box
+  still writes depth and occludes parts at some camera poses); keep part
+  materials opaque; `frustumCulled={false}` on hand-matrixed meshes.
+  Recoater sweeps along X — powder −X → overflow +X (axis
+  operator-confirmed; flip the BuildLayout3D side constants if the ends
+  are backwards).
 - Profile names can lie (a "20mJ/mm" profile contains 15) — read the JSON
   field, never the name.
 - One firmware PrintSession can span multiple recorder builds (restarts);

@@ -25,6 +25,7 @@ export interface UseJobsState {
   list: JobDesc[] | null;
   listError: string | null;
   refresh: () => void;
+  refreshing: boolean;
   fetchJob: (id: string) => Promise<JobDetail>;
   updateJob: (id: string, patch: { name?: string; printProfileId?: string | null }) => Promise<JobDetail>;
   deleteJob: (id: string) => Promise<void>;
@@ -34,6 +35,7 @@ export function useJobs(): UseJobsState {
   const [list, setList] = useState<JobDesc[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +47,8 @@ export function useJobs(): UseJobsState {
         if (!cancelled) { setList(data); setListError(null); }
       } catch (e) {
         if (!cancelled) setListError((e as Error).message ?? String(e));
+      } finally {
+        if (!cancelled) setRefreshing(false);
       }
     };
     void load();
@@ -52,7 +56,10 @@ export function useJobs(): UseJobsState {
     return () => { cancelled = true; clearInterval(id); };
   }, [tick]);
 
-  const refresh = useCallback(() => setTick((n) => n + 1), []);
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    setTick((n) => n + 1);
+  }, []);
 
   const fetchJob = useCallback(async (id: string): Promise<JobDetail> => {
     const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`);
@@ -87,5 +94,5 @@ export function useJobs(): UseJobsState {
     throw new Error(body.error ?? `HTTP ${r.status}`);
   }, []);
 
-  return { list, listError, refresh, fetchJob, updateJob, deleteJob };
+  return { list, listError, refresh, refreshing, fetchJob, updateJob, deleteJob };
 }

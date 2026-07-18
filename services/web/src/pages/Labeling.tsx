@@ -40,7 +40,6 @@ export function Labeling() {
   const [queue, setQueue] = useState<QueueFrame[] | null>(null);
   const [qIdx, setQIdx] = useState(0);
   const [done, setDone] = useState(0);
-  const [picker, setPicker] = useState<{ cand: Candidate } | null>(null);
   const [pickClass, setPickClass] = useState<string>(CLASSES[0] ?? "debris");
   const [busy, setBusy] = useState(false);
   // context scrubber: ±N neighboring frames around the flagged one, to
@@ -128,7 +127,6 @@ export function Labeling() {
     : current?.frameId;
 
   const advance = useCallback(() => {
-    setPicker(null);
     setDone((d) => d + 1);
     setQueue((q) => (q ? q.filter((_, i) => i !== qIdx) : q));
     setQIdx((i) => i); // same index now points at the next frame
@@ -151,51 +149,6 @@ export function Labeling() {
     }
   }, [current, busy, advance]);
 
-  const labelCandidate = async (cand: Candidate, cls: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const r = await fetch("/defect/labels", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          build_id: cand.build_id,
-          layer: cand.layer,
-          ts: cand.ts,
-          frame_ids: [cand.frame_id],
-          class: cls,
-          bbox: cand.bbox,
-          polarity: "positive",
-          source: "triage",
-        }),
-      });
-      const label = r.ok ? await r.json() : null;
-      await fetch(`/defect/anomalies/${cand.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "labeled", label_id: label ? Number(label.id) : undefined }),
-      });
-      setPicker(null);
-      setLabeledCount((c) => c + 1);
-      showFlash(`${cls} label saved`);
-      // remove just this candidate; frame advances when none remain
-      setQueue((q) => {
-        if (!q) return q;
-        const next = q.map((f, i) =>
-          i === qIdx ? { ...f, candidates: f.candidates.filter((c) => c.id !== cand.id) } : f,
-        );
-        if (next[qIdx] && next[qIdx]!.candidates.length === 0) {
-          setDone((d) => d + 1);
-          return next.filter((_, i) => i !== qIdx);
-        }
-        return next;
-      });
-    } catch {
-      setErr("bridge unreachable");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const stageXY = (e: React.PointerEvent): [number, number] => {
     const r = stageRef.current!.getBoundingClientRect();
@@ -270,10 +223,8 @@ export function Labeling() {
         void dismissFrame();
       } else if (e.code === "ArrowRight") {
         setQIdx((i) => Math.min((queue?.length ?? 1) - 1, i + 1));
-        setPicker(null);
       } else if (e.code === "ArrowLeft") {
         setQIdx((i) => Math.max(0, i - 1));
-        setPicker(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -319,25 +270,10 @@ export function Labeling() {
                     className="absolute inset-0 w-full h-full"
                     draggable={false}
                   />
-                  <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 w-full h-full" style={{ pointerEvents: "none" }}>
-                    {current.candidates.map((c) => (
-                      <rect
-                        key={c.id}
-                        x={c.bbox[0]} y={c.bbox[1]}
-                        width={c.bbox[2] - c.bbox[0]} height={c.bbox[3] - c.bbox[1]}
-                        vectorEffect="non-scaling-stroke"
-                        onClick={() => setPicker({ cand: c })}
-                        className={cn(
-                          "cursor-pointer [stroke-width:2] transition-all",
-                          offset !== 0 && "opacity-40",
-                          picker?.cand.id === c.id
-                            ? "fill-amber-400/30 stroke-amber-300"
-                            : "fill-transparent stroke-amber-400/80 hover:fill-amber-400/20",
-                        )}
-                        style={{ pointerEvents: "auto" }}
-                      />
-                    ))}
-                  </svg>
+                  {/* CV candidate boxes removed from display (user:
+                      they got in the way) — candidates still drive WHICH
+                      frames queue and Space still dismisses them; labeling
+                      is draw-only now */}
                   {(dragRect ?? pendingRect ?? (drawn.length > 0 ? drawn : null)) && (
                     <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 w-full h-full pointer-events-none">
                       {drawn.map((d, i) => (
@@ -355,35 +291,6 @@ export function Labeling() {
                   {flash && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-base border-2 border-border bg-green-400 text-black text-[11px] font-heading shadow-shadow">
                       ✓ {flash}
-                    </div>
-                  )}
-                  {picker && (
-                    <div
-                      className="absolute z-20 flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded-base border-2 border-border bg-background shadow-shadow"
-                      style={{
-                        left: `${((picker.cand.bbox[0] + picker.cand.bbox[2]) / 2) * 100}%`,
-                        top: `${picker.cand.bbox[1] * 100}%`,
-                        transform: "translate(-50%, -115%)",
-                      }}
-                    >
-                      <select
-                        value={pickClass}
-                        onChange={(e) => setPickClass(e.target.value)}
-                        className="border-2 border-border rounded-base bg-background px-1 py-0.5 text-[10px] font-mono"
-                        style={{ color: `rgb(${(DEFECT_COLORS[pickClass] ?? [128, 128, 128]).join(",")})` }}
-                      >
-                        {CLASSES.map((cls) => (
-                          <option key={cls} value={cls}>{cls}</option>
-                        ))}
-                      </select>
-                      <button
-                        className="px-1.5 rounded border border-border hover:bg-green-500/20"
-                        title="Save positive label for this region"
-                        onClick={() => void labelCandidate(picker.cand, pickClass)}
-                      >
-                        save
-                      </button>
-                      <button className="px-1 opacity-50 hover:opacity-100" onClick={() => setPicker(null)}>·</button>
                     </div>
                   )}
                 </div>
@@ -445,7 +352,7 @@ export function Labeling() {
                 </Link>
               </div>
               <div className="text-[10px] font-mono opacity-50">
-                amber = CV-flagged powder candidates (click → class → save) · DRAG anywhere to draw your own label · green = saved · Space = clean frame · ←/→ skip
+                DRAG on the frame to draw a label (green = saved) · Space = clean frame, next · ←/→ skip · context slider to check neighboring frames
               </div>
             </>
           ) : null}
@@ -478,8 +385,7 @@ export function Labeling() {
                       key={f.frameId}
                       onClick={() => {
                         setQIdx(i);
-                        setPicker(null);
-                      }}
+                                      }}
                       className={cn(
                         "border-b border-border/40 cursor-pointer hover:bg-secondary-background",
                         i === qIdx && "bg-main/20",

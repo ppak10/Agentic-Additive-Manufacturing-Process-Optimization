@@ -179,7 +179,7 @@ def main() -> int:
     parser.add_argument("--max-per-frame", type=int, default=5)
     parser.add_argument("--top-frames", type=int, default=250,
                         help="keep only the N most suspicious frames per run")
-    parser.add_argument("--min-score", type=float, default=0.4)
+    parser.add_argument("--min-score", type=float, default=0.25)
     parser.add_argument("--min-brightness", type=float, default=MIN_BRIGHTNESS,
                         help="mean-gray floor for a frame to be analyzed")
     parser.add_argument("--reset", action="store_true",

@@ -1,21 +1,16 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
-  Activity,
   Bot,
-  Boxes,
-  Database,
+  MessageSquare,
+  ChevronDown,
+  Factory,
   Tag,
-  FlaskConical,
   Radar,
-  Rss,
-  Layers,
-  Moon,
-  Radio,
-  Settings2,
-  Sun,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Sidebar,
   SidebarContent,
@@ -26,6 +21,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
@@ -39,78 +37,129 @@ import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { Agents } from "@/pages/Agents";
-import { Services } from "@/pages/Services";
+import { ServiceDetail } from "@/pages/Services";
 import { MissionControl } from "@/pages/MissionControl";
+import { SettingsPage } from "@/pages/Settings";
 import { DatasetPage } from "@/pages/Datasets";
 import { TelemetryBuildLab } from "@/pages/TelemetryBuildLab";
 import { Labeling } from "@/pages/Labeling";
-import { usePluginInfo, formatUptime } from "@/hooks/usePluginInfo";
+import { ConversationPage } from "@/pages/Conversation";
 import { useJob, type JobStatus } from "@/hooks/useJob";
+import { useConversations } from "@/hooks/useConversations";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
 
 const NAV_GROUPS = [
   {
     label: "Live",
     items: [
       { to: "/mission", label: "Mission Control", icon: Radar, end: false },
-      { to: "/", label: "Feed", icon: Rss, end: true },
-      { to: "/recording", label: "Recording", icon: Radio, end: false },
-    ],
-  },
-  {
-    label: "Library",
-    items: [
-      { to: "/builds", label: "Builds", icon: Boxes, end: false },
-      { to: "/profiles", label: "Profiles", icon: Settings2, end: false },
-      { to: "/jobs", label: "Jobs", icon: Layers, end: false },
-    ],
-  },
-  {
-    label: "Tuning",
-    items: [
-      { to: "/powder-tuning", label: "Powder Tuning", icon: FlaskConical, end: false },
-    ],
-  },
-  {
-    label: "Agents",
-    items: [
-      { to: "/agents", label: "Sessions", icon: Bot, end: false },
-    ],
-  },
-  {
-    label: "Labeling",
-    items: [
       { to: "/labeling", label: "Triage", icon: Tag, end: false },
-    ],
-  },
-  {
-    label: "Datasets",
-    items: [
-      { to: "/datasets/telemetry", label: "Telemetry", icon: Database, end: false },
-      { to: "/datasets/database", label: "Database", icon: Database, end: false },
-      { to: "/datasets/astm", label: "ASTM", icon: Database, end: false },
-      { to: "/datasets/conversations", label: "Conversations", icon: Database, end: false },
-      { to: "/datasets/knowledge", label: "Knowledge", icon: Database, end: false },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { to: "/services", label: "Services", icon: Activity, end: false },
     ],
   },
 ] as const;
 
-function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () => void }) {
+// "Machine" — collapsible dropdown group (neobrutalism sidebar submenu
+// pattern: Collapsible + SidebarMenuSub), holding the printer-library
+// pages. Rendered between Live and Tuning.
+const MACHINE_ITEMS = [
+  { to: "/builds", label: "Builds" },
+  { to: "/profiles", label: "Profiles" },
+  { to: "/jobs", label: "Jobs" },
+  { to: "/powder-tuning", label: "Powder Tuning" },
+] as const;
+
+// ChatGPT-style recent-conversations list: the agent plane's history,
+// one link per conversation (panel console, chats, headless runs), plus
+// the full Sessions table as the tail item.
+function ConversationsNav() {
   const location = useLocation();
-  const info = usePluginInfo();
+  const conversations = useConversations(12);
+  return (
+    <SidebarGroup className="border-b-0">
+      <SidebarGroupLabel>Conversations</SidebarGroupLabel>
+      <SidebarMenu>
+        {(conversations ?? []).map((c) => {
+          const to = `/conversations/${c.id}`;
+          return (
+            <SidebarMenuItem key={c.id}>
+              <SidebarMenuButton
+                asChild
+                tooltip={c.title ?? `conversation ${c.id}`}
+                isActive={location.pathname === to}
+              >
+                <NavLink to={to}>
+                  <MessageSquare />
+                  <span className="truncate">
+                    {c.title?.trim() || `${c.role} · ${c.harness} #${c.id}`}
+                  </span>
+                </NavLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            asChild
+            tooltip="All sessions"
+            isActive={location.pathname.startsWith("/agents")}
+          >
+            <NavLink to="/agents">
+              <Bot />
+              <span className="opacity-70">All sessions</span>
+            </NavLink>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+}
+
+function MachineNav() {
+  const location = useLocation();
+  const anyActive = MACHINE_ITEMS.some((i) => location.pathname.startsWith(i.to));
+  return (
+    <SidebarGroup className="border-b-0">
+      <SidebarMenu>
+        <Collapsible defaultOpen={anyActive} className="group/collapsible" asChild>
+          <SidebarMenuItem>
+            <CollapsibleTrigger asChild>
+              <SidebarMenuButton tooltip="Machine" isActive={anyActive}>
+                <Factory />
+                <span>Machine</span>
+                <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+              </SidebarMenuButton>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarMenuSub>
+                {MACHINE_ITEMS.map((item) => (
+                  <SidebarMenuSubItem key={item.to}>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={location.pathname.startsWith(item.to)}
+                    >
+                      <NavLink to={item.to}>{item.label}</NavLink>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </CollapsibleContent>
+          </SidebarMenuItem>
+        </Collapsible>
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+}
+
+function AppSidebar() {
+  const location = useLocation();
 
   return (
     <Sidebar collapsible="icon">
       <SidebarContent>
         {NAV_GROUPS.map((group) => (
-          <SidebarGroup key={group.label}>
-            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+          <React.Fragment key={group.label}>
+          <SidebarGroup className="border-b-0">
             <SidebarMenu>
               {group.items.map((item) => {
                 const isActive = item.end
@@ -129,30 +178,26 @@ function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () =>
               })}
             </SidebarMenu>
           </SidebarGroup>
+          </React.Fragment>
         ))}
+        {/* rendered explicitly — interleaving on group index broke when the
+            group list shrank to one (the dropdown silently vanished) */}
+        <MachineNav />
+        <ConversationsNav />
       </SidebarContent>
 
       <SidebarFooter>
         <SidebarMenu>
-          {info && (
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip={`plugin v${info.version} · up ${formatUptime(info.uptimeSeconds)}`}
-                className="pointer-events-none select-none"
-              >
-                <span className="text-[10px] opacity-50 truncate">
-                  v{info.version} · up {formatUptime(info.uptimeSeconds)}
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          )}
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip={dark ? "Switch to light mode" : "Switch to dark mode"}
-              onClick={onToggleDark}
+              asChild
+              tooltip="Settings"
+              isActive={location.pathname.startsWith("/settings")}
             >
-              {dark ? <Sun /> : <Moon />}
-              <span>{dark ? "Light mode" : "Dark mode"}</span>
+              <NavLink to="/settings">
+                <Settings />
+                <span>Settings</span>
+              </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -177,25 +222,33 @@ function AppShell() {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <AppSidebar dark={dark} onToggleDark={() => setDark((d) => !d)} />
-      <SidebarInset className="flex flex-col min-h-0">
+      <AppSidebar />
+      {/* h-svh caps the shell at the viewport so page-internal scroll areas
+          (e.g. the Jobs data-table) engage instead of growing the window */}
+      <SidebarInset className="flex flex-col min-h-0 h-svh">
         <header className="flex items-center gap-2 border-b-2 border-border bg-background px-3 py-2 shrink-0">
           <SidebarTrigger />
-          <div className="h-5 w-[2px] bg-border" />
-          <RecordingStatusBanner />
-          {job && (
-            <div className="ml-auto flex items-center gap-4 text-[10px] font-mono opacity-60">
-              <span>cpu {job.cpuTemp.toFixed(0)}°C</span>
-              <span>gpu {job.gpuTemp.toFixed(0)}°C</span>
-              <span>load {job.totalCpuLoad.toFixed(1)}%</span>
-              <span>mem {job.selfUsedMemory}/{job.totalAvailableMemory} MB</span>
-            </div>
-          )}
+          {/* recording status lives top-right; the cpu/gpu/load/mem readout
+              retired 2026-07-16 (it belongs on the firmware service page if
+              anywhere) */}
+          <div className="ml-auto">
+            <RecordingStatusBanner />
+          </div>
         </header>
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 min-h-0 overflow-auto flex flex-col">
+          {/* docs-style breadcrumb: top-left of the page content; pages can
+              portal actions into the right end of the row (#breadcrumb-actions) */}
+          <div className="px-4 pt-3 shrink-0 flex items-center justify-between gap-2">
+            <Breadcrumbs />
+            <div id="breadcrumb-actions" className="flex items-center gap-2" />
+          </div>
+          <div className="flex-1 min-h-0">
           <Routes>
-            <Route path="/" element={<Dashboard job={job} />} />
-            <Route path="/recording" element={<Recording />} />
+            {/* Feed content moved to /services/plugin (2026-07-16); Mission
+                Control is the landing page */}
+            <Route path="/" element={<Navigate to="/mission" replace />} />
+            {/* legacy path — Recording page now lives under the recorder service */}
+            <Route path="/recording" element={<Navigate to="/services/recorder" replace />} />
             <Route path="/builds" element={<Builds />} />
             <Route path="/builds/:buildId" element={<BuildCard />} />
             <Route path="/builds/:buildId/replay" element={<Replay />} />
@@ -203,15 +256,20 @@ function AppShell() {
             <Route path="/database" element={<Navigate to="/builds" replace />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
             <Route path="/profiles" element={<PrintProfiles />} />
-            <Route path="/jobs" element={<Jobs />} />
+            <Route path="/jobs/:id?" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
             <Route path="/labeling" element={<Labeling />} />
+            <Route path="/conversations/:id" element={<ConversationPage />} />
             <Route path="/datasets/:slug" element={<DatasetPage />} />
             <Route path="/datasets/telemetry/:buildId" element={<TelemetryBuildLab />} />
-            <Route path="/services" element={<Services />} />
+            {/* the overview grid retired 2026-07-16 — per-service pages only */}
+            <Route path="/services" element={<Navigate to="/settings" replace />} />
+            <Route path="/services/:slug" element={<ServiceDetail />} />
+            <Route path="/settings" element={<SettingsPage dark={dark} onToggleDark={() => setDark((d) => !d)} />} />
           </Routes>
+          </div>
         </main>
       </SidebarInset>
       {/* The right-docked agent sidebar is gone (2026-07-16): Mission

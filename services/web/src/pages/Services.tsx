@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useParams } from "react-router-dom";
 import {
   AlertOctagon,
   Bot,
@@ -6,6 +7,7 @@ import {
   Cpu,
   Database,
   HelpCircle,
+  Radar,
   Radio,
   RefreshCw,
   WifiOff,
@@ -13,9 +15,17 @@ import {
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MetricRow } from "@/components/ui/metric-row";
-import { useServicesHealth, type ServiceProbe } from "@/hooks/useServicesHealth";
+import { useServicesHealth, type ServiceProbe, type ServicesHealth } from "@/hooks/useServicesHealth";
 import { formatUptime } from "@/hooks/usePluginInfo";
+import { Recording } from "@/pages/Recording";
+import { Dashboard } from "@/pages/Dashboard";
+import { useJob } from "@/hooks/useJob";
 import { cn } from "@/lib/utils";
+
+// Services: per-service detail pages only (overview grid retired 2026-07-16)
+// — /services/:slug, linked from the Settings Services card. The recorder
+// detail embeds the full Recording page (moved out of the sidebar
+// 2026-07-16); the broker detail carries the harness-auth panel.
 
 // Expected identity of the real database. If the connected cluster is missing
 // the agent tables or has fewer builds than this, we are almost certainly
@@ -88,6 +98,226 @@ function fmtAgo(iso: string | null): string {
 
 function probeTone(p: ServiceProbe<unknown>): Tone {
   return p.status === "up" ? "up" : p.status === "down" ? "down" : "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// Per-service cards (each takes the shared health poll)
+
+function RecorderCard({ health }: { health: ServicesHealth }) {
+  const { recorder } = health;
+  const rec = recorder.data;
+  return (
+    <ServiceCard
+      title="Recorder"
+      subtitle="agentic-sls-recorder · :3000"
+      icon={Radio}
+      tone={probeTone(recorder)}
+      toneLabel={recorder.status === "up" ? rec?.overall : undefined}
+      error={recorder.error}
+    >
+      {rec && (
+        <>
+          <p className="text-xs opacity-70">{rec.reason}</p>
+          <MetricRow label="current build" value={rec.build.current_build_id ?? "none"} />
+          <MetricRow
+            label="telemetry frame lag"
+            value={rec.spool.telemetry.frame_lag_ms != null ? `${rec.spool.telemetry.frame_lag_ms} ms` : "—"}
+          />
+          {rec.importer && (
+            <MetricRow
+              label="importer"
+              value={`build ${rec.importer.buildId} ${rec.importer.stream} (${rec.importer.rowsInserted.toLocaleString()} rows)`}
+            />
+          )}
+          <MetricRow label="probe latency" value={`${recorder.latencyMs} ms`} />
+        </>
+      )}
+      {recorder.status === "down" && (
+        <p className="text-xs opacity-70">docker logs -f agentic-sls-recorder</p>
+      )}
+    </ServiceCard>
+  );
+}
+
+function PostgresCard({ health }: { health: ServicesHealth }) {
+  const { db } = health;
+  const dbd = db.data;
+  // Stale-cluster tripwire (see comment on MIN_BUILDS).
+  const dbIdentityBad =
+    db.status === "up" &&
+    dbd != null &&
+    (dbd.has_agent_tables === false ||
+      dbd.has_build_summaries === false ||
+      (dbd.builds_count != null && dbd.builds_count < MIN_BUILDS));
+  const dbTone: Tone = db.status !== "up" ? probeTone(db) : dbIdentityBad ? "warn" : "up";
+  return (
+    <ServiceCard
+      title="Postgres"
+      subtitle="agentic-sls-postgres · :5432"
+      icon={Database}
+      tone={dbTone}
+      toneLabel={dbIdentityBad ? "WRONG CLUSTER?" : undefined}
+      error={db.error ?? dbd?.error}
+    >
+      {dbd?.connected && (
+        <>
+          {dbIdentityBad && (
+            <p className="text-xs text-red-600 font-bold">
+              Connected cluster fails the identity check (builds {dbd.builds_count ?? "?"} /{" "}
+              {MIN_BUILDS} expected
+              {dbd.has_agent_tables === false ? ", agent tables missing" : ""}
+              {dbd.has_build_summaries === false ? ", build_summaries missing" : ""}
+              ) — possible stale datadir from a docker/mount boot race. See wiki Operations.
+            </p>
+          )}
+          <MetricRow label="builds" value={`${dbd.builds_count ?? "—"} (max id ${dbd.max_build ?? "—"})`} />
+          <MetricRow label="agent tables" value={dbd.has_agent_tables ? "present" : "MISSING"} />
+          <MetricRow label="build summaries" value={dbd.has_build_summaries ? "present" : "MISSING"} />
+          <MetricRow label="last event" value={fmtAgo(dbd.last_event_ts)} />
+          <MetricRow label="query latency" value={`${dbd.latency_ms} ms`} />
+        </>
+      )}
+      {db.status === "unknown" && (
+        <p className="text-xs opacity-70">Reported via the recorder — recorder is down, so Postgres state is unknown.</p>
+      )}
+    </ServiceCard>
+  );
+}
+
+function BrokerCard({ health }: { health: ServicesHealth }) {
+  const { broker } = health;
+  const brk = broker.data;
+  return (
+    <ServiceCard
+      title="Agent broker"
+      subtitle="agentic-sls-broker · :3100"
+      icon={Bot}
+      tone={probeTone(broker)}
+      error={broker.error}
+    >
+      {brk && (
+        <>
+          <MetricRow label="active chats" value={brk.chats} />
+          <MetricRow label="database" value={brk.db ? "connected" : "NOT CONFIGURED"} />
+          <MetricRow label="probe latency" value={`${broker.latencyMs} ms`} />
+        </>
+      )}
+      {broker.status === "down" && (
+        <p className="text-xs opacity-70">docker logs -f agentic-sls-broker</p>
+      )}
+    </ServiceCard>
+  );
+}
+
+function PluginCard({ health }: { health: ServicesHealth }) {
+  const { plugin } = health;
+  const plg = plugin.data;
+  return (
+    <ServiceCard
+      title="Inova plugin"
+      subtitle="printer · :5001"
+      icon={Cpu}
+      tone={probeTone(plugin)}
+      error={plugin.error}
+    >
+      {plg && (
+        <>
+          <MetricRow label="version" value={plg.version} />
+          <MetricRow label="uptime" value={formatUptime(plg.uptimeSeconds)} />
+          <MetricRow label="probe latency" value={`${plugin.latencyMs} ms`} />
+        </>
+      )}
+      {plugin.status === "unknown" && (
+        <p className="text-xs opacity-70">Proxied via the recorder — recorder is down, so plugin state is unknown.</p>
+      )}
+    </ServiceCard>
+  );
+}
+
+function FirmwareCard({ health }: { health: ServicesHealth }) {
+  const { recorder } = health;
+  const rec = recorder.data;
+  const firmwareTone: Tone =
+    recorder.status !== "up" ? "unknown" : rec?.firmware.reachable ? "up" : "down";
+  return (
+    <ServiceCard
+      title="Firmware"
+      subtitle="printer · :80"
+      icon={Cpu}
+      tone={firmwareTone}
+      error={rec?.firmware.error ?? null}
+    >
+      {rec && (
+        <>
+          <MetricRow label="reachable" value={rec.firmware.reachable ? "yes" : "no"} />
+          <MetricRow label="phase" value={rec.firmware.phase ?? "idle"} />
+          <MetricRow label="printing" value={rec.firmware.is_printing ? "yes" : "no"} />
+        </>
+      )}
+      {firmwareTone === "unknown" && (
+        <p className="text-xs opacity-70">Reported via the recorder — recorder is down, so firmware state is unknown.</p>
+      )}
+    </ServiceCard>
+  );
+}
+
+// Defect bridge card — self-polling (not part of useServicesHealth yet).
+interface DefectHealth {
+  status: string;
+  model_url: string;
+  model_reachable: boolean | null;
+  recording: boolean;
+  build_id: number | null;
+  phase: string | null;
+  last_error: string | null;
+  last_result_ts: string | null;
+}
+
+function DefectCard() {
+  const [probe, setProbe] = useState<{ up: boolean; d: DefectHealth | null }>({ up: false, d: null });
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch("/defect/health");
+        const d = r.ok ? await r.json() : null;
+        if (!cancelled) setProbe({ up: r.ok, d });
+      } catch {
+        if (!cancelled) setProbe({ up: false, d: null });
+      }
+    };
+    void tick();
+    const t = setInterval(tick, 4_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+  const d = probe.d;
+  return (
+    <ServiceCard
+      title="Defect bridge"
+      subtitle="agentic-sls-defect · :3200"
+      icon={Radar}
+      tone={probe.up ? (d?.model_reachable === false ? "warn" : "up") : "down"}
+      toneLabel={probe.up && d?.model_reachable === false ? "MODEL UNREACHABLE" : undefined}
+      error={d?.last_error ?? null}
+    >
+      {d && (
+        <>
+          <MetricRow label="model server" value={d.model_url} />
+          <MetricRow
+            label="model reachable"
+            value={d.model_reachable == null ? "not yet called" : d.model_reachable ? "yes" : "NO"}
+          />
+          <MetricRow label="watching build" value={d.build_id ?? "none"} />
+          <MetricRow label="phase" value={d.phase ?? "—"} />
+          <MetricRow label="last verdict" value={fmtAgo(d.last_result_ts)} />
+        </>
+      )}
+      {!probe.up && <p className="text-xs opacity-70">docker logs -f agentic-sls-defect</p>}
+    </ServiceCard>
+  );
 }
 
 interface HarnessStatus {
@@ -167,159 +397,49 @@ function HarnessAuthCard() {
   );
 }
 
-export function Services() {
+// ---------------------------------------------------------------------------
+// Per-service detail pages (/services/:slug). Registry keyed by slug —
+// title used for breadcrumbs elsewhere; extras render below the card.
+
+export const SERVICE_SLUGS = ["recorder", "postgres", "broker", "defect", "plugin", "firmware"] as const;
+export type ServiceSlug = (typeof SERVICE_SLUGS)[number];
+
+export const SERVICE_TITLES: Record<ServiceSlug, string> = {
+  recorder: "Recorder",
+  postgres: "Postgres",
+  broker: "Agent broker",
+  defect: "Defect bridge",
+  plugin: "Inova plugin",
+  firmware: "Firmware",
+};
+
+export function ServiceDetail() {
+  const { slug } = useParams();
   const health = useServicesHealth(4_000);
-
-  if (!health) {
-    return <div className="p-4 text-sm opacity-60">Probing services…</div>;
+  // plugin detail embeds the live feed panels (moved from the Feed page
+  // 2026-07-16) — they're all views of the plugin's own streams
+  const job = useJob(slug === "plugin" ? 1000 : 60_000); // slow when unused
+  if (!SERVICE_SLUGS.includes(slug as ServiceSlug)) {
+    return <div className="p-4 text-xs opacity-60">Unknown service.</div>;
   }
-
-  const { recorder, db, broker, plugin } = health;
-  const rec = recorder.data;
-  const dbd = db.data;
-  const brk = broker.data;
-  const plg = plugin.data;
-
-  // Stale-cluster tripwire (see comment on MIN_BUILDS).
-  const dbIdentityBad =
-    db.status === "up" &&
-    dbd != null &&
-    (dbd.has_agent_tables === false ||
-      dbd.has_build_summaries === false ||
-      (dbd.builds_count != null && dbd.builds_count < MIN_BUILDS));
-  const dbTone: Tone = db.status !== "up" ? probeTone(db) : dbIdentityBad ? "warn" : "up";
-
-  const firmwareTone: Tone =
-    recorder.status !== "up" ? "unknown" : rec?.firmware.reachable ? "up" : "down";
-
+  if (!health && slug !== "defect") {
+    return <div className="p-4 text-sm opacity-60">Probing…</div>;
+  }
+  const card =
+    slug === "recorder" ? <RecorderCard health={health!} /> :
+    slug === "postgres" ? <PostgresCard health={health!} /> :
+    slug === "broker" ? <BrokerCard health={health!} /> :
+    slug === "plugin" ? <PluginCard health={health!} /> :
+    slug === "firmware" ? <FirmwareCard health={health!} /> :
+    <DefectCard />;
   return (
     <div className="p-4 space-y-4">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <ServiceCard
-          title="Recorder"
-          subtitle="agentic-sls-recorder · :3000"
-          icon={Radio}
-          tone={probeTone(recorder)}
-          toneLabel={recorder.status === "up" ? rec?.overall : undefined}
-          error={recorder.error}
-        >
-          {rec && (
-            <>
-              <p className="text-xs opacity-70">{rec.reason}</p>
-              <MetricRow label="current build" value={rec.build.current_build_id ?? "none"} />
-              <MetricRow
-                label="telemetry frame lag"
-                value={rec.spool.telemetry.frame_lag_ms != null ? `${rec.spool.telemetry.frame_lag_ms} ms` : "—"}
-              />
-              {rec.importer && (
-                <MetricRow
-                  label="importer"
-                  value={`build ${rec.importer.buildId} ${rec.importer.stream} (${rec.importer.rowsInserted.toLocaleString()} rows)`}
-                />
-              )}
-              <MetricRow label="probe latency" value={`${recorder.latencyMs} ms`} />
-            </>
-          )}
-          {recorder.status === "down" && (
-            <p className="text-xs opacity-70">
-              systemctl --user status agentic-recorder · journalctl --user -u agentic-recorder -f
-            </p>
-          )}
-        </ServiceCard>
-
-        <ServiceCard
-          title="Postgres"
-          subtitle="agentic-sls-postgres · :5432"
-          icon={Database}
-          tone={dbTone}
-          toneLabel={dbIdentityBad ? "WRONG CLUSTER?" : undefined}
-          error={db.error ?? dbd?.error}
-        >
-          {dbd?.connected && (
-            <>
-              {dbIdentityBad && (
-                <p className="text-xs text-red-600 font-bold">
-                  Connected cluster fails the identity check (builds {dbd.builds_count ?? "?"} /{" "}
-                  {MIN_BUILDS} expected
-                  {dbd.has_agent_tables === false ? ", agent tables missing" : ""}
-                  {dbd.has_build_summaries === false ? ", build_summaries missing" : ""}
-                  ) — possible stale datadir from a docker/mount boot race. See wiki Operations.
-                </p>
-              )}
-              <MetricRow label="builds" value={`${dbd.builds_count ?? "—"} (max id ${dbd.max_build ?? "—"})`} />
-              <MetricRow label="agent tables" value={dbd.has_agent_tables ? "present" : "MISSING"} />
-              <MetricRow label="build summaries" value={dbd.has_build_summaries ? "present" : "MISSING"} />
-              <MetricRow label="last event" value={fmtAgo(dbd.last_event_ts)} />
-              <MetricRow label="query latency" value={`${dbd.latency_ms} ms`} />
-            </>
-          )}
-          {db.status === "unknown" && (
-            <p className="text-xs opacity-70">Reported via the recorder — recorder is down, so Postgres state is unknown.</p>
-          )}
-        </ServiceCard>
-
-        <ServiceCard
-          title="Agent broker"
-          subtitle="agentic-broker · :3100"
-          icon={Bot}
-          tone={probeTone(broker)}
-          error={broker.error}
-        >
-          {brk && (
-            <>
-              <MetricRow label="active chats" value={brk.chats} />
-              <MetricRow label="database" value={brk.db ? "connected" : "NOT CONFIGURED"} />
-              <MetricRow label="probe latency" value={`${broker.latencyMs} ms`} />
-            </>
-          )}
-          {broker.status === "down" && (
-            <p className="text-xs opacity-70">systemctl --user status agentic-broker</p>
-          )}
-        </ServiceCard>
-
-        <ServiceCard
-          title="Inova plugin"
-          subtitle="printer · :5001"
-          icon={Cpu}
-          tone={probeTone(plugin)}
-          error={plugin.error}
-        >
-          {plg && (
-            <>
-              <MetricRow label="version" value={plg.version} />
-              <MetricRow label="uptime" value={formatUptime(plg.uptimeSeconds)} />
-              <MetricRow label="probe latency" value={`${plugin.latencyMs} ms`} />
-            </>
-          )}
-          {plugin.status === "unknown" && (
-            <p className="text-xs opacity-70">Proxied via the recorder — recorder is down, so plugin state is unknown.</p>
-          )}
-        </ServiceCard>
-
-        <ServiceCard
-          title="Firmware"
-          subtitle="printer · :80"
-          icon={Cpu}
-          tone={firmwareTone}
-          error={rec?.firmware.error ?? null}
-        >
-          {rec && (
-            <>
-              <MetricRow label="reachable" value={rec.firmware.reachable ? "yes" : "no"} />
-              <MetricRow label="phase" value={rec.firmware.phase ?? "idle"} />
-              <MetricRow label="printing" value={rec.firmware.is_printing ? "yes" : "no"} />
-            </>
-          )}
-          {firmwareTone === "unknown" && (
-            <p className="text-xs opacity-70">Reported via the recorder — recorder is down, so firmware state is unknown.</p>
-          )}
-        </ServiceCard>
-      </div>
-      <HarnessAuthCard />
-      <p className="text-[10px] font-mono opacity-40">
-        probed {new Date(health.checkedAt).toLocaleTimeString()} · every 4s · dashboard (agentic-web · :5173) is up if
-        you can read this
-      </p>
+      {/* recorder + plugin: the embedded pages ARE the detail — their own
+          cards would duplicate the same data right above */}
+      {slug !== "recorder" && slug !== "plugin" && <div className="max-w-2xl">{card}</div>}
+      {slug === "recorder" && <Recording />}
+      {slug === "plugin" && <Dashboard job={job} />}
+      {slug === "broker" && <HarnessAuthCard />}
     </div>
   );
 }

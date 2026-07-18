@@ -46,8 +46,9 @@ function buildInstanceMatrix(
 
 // World-placement matrix for a printing object (transposed API row-major →
 // column-major, no local translation — the mesh's own vertices already sit
-// in its local coordinate system).
-function buildWorldMatrix(transform: number[][]): THREE.Matrix4 {
+// in its local coordinate system). Exported for JobPreview3D, which renders
+// stored-job instances in the same convention.
+export function buildWorldMatrix(transform: number[][]): THREE.Matrix4 {
   return rowMajorToMatrix4(transform).transpose();
 }
 
@@ -88,7 +89,9 @@ function ObjectMesh({
 
   if (geometry) {
     return (
-      <mesh geometry={geometry} matrix={worldMatrix} matrixAutoUpdate={false} {...handlers}>
+      // frustumCulled off — same reason as JobPreview3D's InstanceMesh:
+      // manual matrices + culling make parts vanish at some camera poses
+      <mesh geometry={geometry} matrix={worldMatrix} matrixAutoUpdate={false} frustumCulled={false} {...handlers}>
         <meshStandardMaterial color={color} transparent opacity={opacity} />
         {isSelected && <Edges color={edgeColor} />}
       </mesh>
@@ -100,19 +103,19 @@ function ObjectMesh({
   if (!obj.bounds) return null;
   const { matrix, size } = buildInstanceMatrix(obj.transform, obj.bounds.center, obj.bounds.size);
   return (
-    <mesh matrix={matrix} matrixAutoUpdate={false} {...handlers}>
+    <mesh matrix={matrix} matrixAutoUpdate={false} frustumCulled={false} {...handlers}>
       <boxGeometry args={size} />
       <meshStandardMaterial color={color} transparent opacity={0.3} wireframe />
     </mesh>
   );
 }
 
-// Side assignment for the chamber labels. Mk1 axes weren't documented in
-// the firmware source we have access to, so this is a best-guess based on
-// common SLS layout (recoater sweeps along Y, powder feed on -Y, overflow
-// on +Y). Flip these two values if the labels render on the wrong sides.
-const POWDER_BIN_SIDE: "minX" | "maxX" | "minY" | "maxY" = "minY";
-const OVERFLOW_SIDE: "minX" | "maxX" | "minY" | "maxY" = "maxY";
+// Side assignment for the chamber labels. Corrected per operator
+// 2026-07-18: the recoater sweeps along X (was wrongly labeled on the Y
+// faces) — powder feed on -X, overflow on +X. Flip these two values if
+// the labels render on the wrong sides.
+const POWDER_BIN_SIDE: "minX" | "maxX" | "minY" | "maxY" = "minX";
+const OVERFLOW_SIDE: "minX" | "maxX" | "minY" | "maxY" = "maxX";
 
 // Returns the centroid of a chamber face on the given side, plus an
 // outward-pointing normal direction in chamber coords (origin at corner).
@@ -169,7 +172,7 @@ function SideLabel({
   );
 }
 
-function Chamber({ size }: { size: ChamberSize }) {
+export function Chamber({ size }: { size: ChamberSize }) {
   // Chamber is a wireframe box centered on (sizeX/2, sizeY/2, sizeZ/2) so
   // its origin corner matches the firmware's chamber origin at (0,0,0).
   // We center the geometry then translate to match.
@@ -177,7 +180,11 @@ function Chamber({ size }: { size: ChamberSize }) {
     <>
       <mesh position={[size.sizeX / 2, size.sizeY / 2, size.sizeZ / 2]}>
         <boxGeometry args={[size.sizeX, size.sizeY, size.sizeZ]} />
-        <meshBasicMaterial transparent opacity={0} />
+        {/* depthWrite off: an invisible material still writes depth by
+            default, and in the sorted transparent pass the box can draw
+            before the parts inside it — occluding them entirely at some
+            camera poses (same guard LayerPlane uses) */}
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         <Edges color="#888" />
       </mesh>
       <SideLabel text="Recoater" color="#7ad9ff" side={POWDER_BIN_SIDE} chamber={size} />
