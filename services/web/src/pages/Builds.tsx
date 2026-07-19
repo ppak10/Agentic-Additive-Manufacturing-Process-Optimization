@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, RefreshCw, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,33 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useTasks } from "@/hooks/useTasks";
+import { useBuildStatus, type BuildArtifacts } from "@/hooks/useBuildStatus";
+
+// Dataset-artifact readout for a build: one dot per pipeline output, green when
+// the file exists in the Telemetry dataset. Tooltip spells it out.
+const ART_KEYS: { key: keyof BuildArtifacts; label: string }[] = [
+  { key: "telemetry", label: "telemetry" },
+  { key: "frames", label: "frames" },
+  { key: "labels", label: "labels" },
+  { key: "ticks", label: "ticks" },
+  { key: "peregrine", label: "peregrine" },
+];
+
+function ArtifactDots({ a }: { a?: BuildArtifacts }) {
+  if (!a) return <span className="text-[10px] opacity-30">…</span>;
+  const title = ART_KEYS.map((k) => `${k.label} ${a[k.key] ? "✓" : "✗"}`).join(" · ");
+  return (
+    <span className="inline-flex items-center gap-0.5" title={title}>
+      {ART_KEYS.map((k) => (
+        <span
+          key={k.key}
+          className={cn("size-2 rounded-full border border-border", a[k.key] && "bg-green-500")}
+        />
+      ))}
+    </span>
+  );
+}
 
 // Builds — the human-facing view of the build registry: every recorded
 // build joined to its firmware session, job, print profile, telemetry
@@ -107,6 +134,22 @@ export function Builds() {
   const [notWired, setNotWired] = useState(false);
   const [storage, setStorage] = useState<StorageSummary | null>(null);
   const [query, setQuery] = useState("");
+  // Dataset artifact status + one-click per-build refresh (runs refresh_build
+  // through the tasks service). activeFor() reflects a pending/running task so
+  // the button becomes a spinner instead of double-queuing.
+  const { list: tasks, createTask } = useTasks();
+  const artifacts = useBuildStatus((rows ?? []).map((r) => r.build_id));
+  const [triggerErr, setTriggerErr] = useState<string | null>(null);
+  const handleRefresh = async (buildId: number) => {
+    setTriggerErr(null);
+    try {
+      await createTask("refresh_build", { build_id: buildId });
+    } catch (e) {
+      setTriggerErr((e as Error).message ?? String(e));
+    }
+  };
+  const activeFor = (buildId: number) =>
+    tasks?.find((t) => t.build_id === buildId && (t.status === "pending" || t.status === "running"));
   // Sortable + paginated, newest build first by default; text columns default
   // ascending on first click (same convention as the Jobs data-table).
   const PAGE_SIZE = 25;
@@ -203,6 +246,7 @@ export function Builds() {
             className="h-8 pl-7 text-xs"
           />
         </div>
+        {triggerErr && <span className="text-xs text-red-600 dark:text-red-400">{triggerErr}</span>}
       </div>
 
       {notWired && (
@@ -234,6 +278,7 @@ export function Builds() {
                     <SortHead label="layers" sortKey="n_print_layers" sort={sort} onSort={handleSort} className="w-20" />
                     <SortHead label="duration" sortKey="duration_s" sort={sort} onSort={handleSort} className="w-24" />
                     <TableHead className="h-8 px-2 text-xs font-heading w-28">session</TableHead>
+                    <TableHead className="h-8 px-2 text-xs font-heading w-36">dataset</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -268,6 +313,26 @@ export function Builds() {
                           ) : (
                             <span className="opacity-50">unlinked</span>
                           )}
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <ArtifactDots a={artifacts[r.build_id]} />
+                            {activeFor(r.build_id) ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] opacity-70">
+                                <Loader2 className="size-3 animate-spin" /> running
+                              </span>
+                            ) : (
+                              <Button
+                                variant="neutral"
+                                size="sm"
+                                className="h-6 px-1.5"
+                                title="Refresh this build's dataset (export → summarize → labels → frames → ticks → peregrine)"
+                                onClick={() => void handleRefresh(r.build_id)}
+                              >
+                                <RefreshCw className="size-3" />
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );

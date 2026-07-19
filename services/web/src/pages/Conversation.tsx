@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ChevronRight, ThumbsUp, ThumbsDown, Bell, BellOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Markdown } from "@/components/Markdown";
 import { useSetArtifacts, type Artifact } from "@/panels/ArtifactPanel";
-import { useIsPrinting } from "@/hooks/useIsPrinting";
 import { refreshConversations } from "@/hooks/useConversations";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +37,17 @@ interface Msg {
   is_error: boolean | null;
 }
 
+// One row of the agent-curated artifact panel (conversation_artifacts, via the
+// artifact_* MCP tools). artifact_id is a job/profile UUID or a numeric build id.
+interface ConvArtifact {
+  artifact_type: "job" | "build" | "profile";
+  artifact_id: string;
+  provenance: "created" | "referenced";
+  attached_by: "agent" | "operator";
+  note: string | null;
+  attached_at: string;
+}
+
 interface ConversationData {
   conversation: {
     id: number;
@@ -45,9 +56,37 @@ interface ConversationData {
     role: string;
     model: string | null;
     debug: boolean;
+    alerts_muted: boolean;
   };
   messages: Msg[];
   builds: number[];
+  artifacts: ConvArtifact[];
+  feedback: FeedbackRow[];
+}
+
+// A build-scoped defect alert (build_alerts), delivered to every conversation
+// that has the build attached. snapshot = the model's output: the input frame
+// (served by the defect bridge, keyed by event_id) + the maps_png overlay.
+interface BuildAlert {
+  id: number;
+  event_id: number;
+  build_id: number;
+  layer: number | null;
+  alerts: string[];
+  status: "new" | "addressed" | "dismissed";
+  addressed_by_conversation_id: number | null;
+  snapshot: { input_frame_event_id?: number; maps_png?: Record<string, string> | null } | null;
+}
+
+// Pointwise feedback (thumbs on a response now; action ratings later). For a
+// response, target_id is the turn number as a string.
+type Rating = "up" | "down";
+interface FeedbackRow {
+  target_kind: string;
+  target_id: string;
+  rating: string | null;
+  correction: string | null;
+  note: string | null;
 }
 
 type ApprovalMode = "ask" | "auto" | "plan";
@@ -86,47 +125,14 @@ function itemTurn(it: Item): number {
   return it.type === "msg" ? it.msg.turn : (it.call ?? it.result)!.turn;
 }
 
-// ── artifact derivation ─────────────────────────────────────────────────────
-// The right-hand artifact panel is a pure projection of the transcript. MVP:
-// jobs only. Harnesses may namespace MCP tools (Claude → mcp__<srv>__job_get),
-// so compare on the segment after the last "__".
-function bareToolName(name: string | null): string {
-  if (!name) return "";
-  const i = name.lastIndexOf("__");
-  return i >= 0 ? name.slice(i + 2) : name;
-}
-
-// Every job the agent referenced, in first-appearance order (deduped):
-// job_get/job_set carry the id in tool_input.job_id; job_create_from_template
-// returns the NEW job id in its result JSON. Each becomes an artifact tab.
-function deriveJobIds(messages: Msg[]): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const add = (id: string) => {
-    if (!seen.has(id)) {
-      seen.add(id);
-      ids.push(id);
-    }
-  };
-  let lastCall: string | null = null;
-  for (const m of messages) {
-    if (m.kind === "tool_call") {
-      lastCall = bareToolName(m.tool_name);
-      const input = m.tool_input as Record<string, unknown> | null;
-      if ((lastCall === "job_get" || lastCall === "job_set") && typeof input?.job_id === "string") {
-        add(input.job_id);
-      }
-    } else if (m.kind === "tool_result") {
-      if (lastCall === "job_create_from_template" && m.content) {
-        try {
-          const j = JSON.parse(m.content) as { id?: unknown };
-          if (typeof j.id === "string") add(j.id);
-        } catch { /* result wasn't JSON */ }
-      }
-      lastCall = null;
-    }
-  }
-  return ids;
+// The right-hand artifact panel is the agent-curated set (conversation_artifacts,
+// via the artifact_* MCP tools) — NOT a scrape of the transcript. This means a
+// job the agent merely browsed (job_list / a comparison job_get) does NOT leak
+// onto the panel; only artifacts it deliberately pinned (or created) appear.
+function convArtifactToArtifact(a: ConvArtifact): Artifact {
+  if (a.artifact_type === "build") return { kind: "build", buildId: a.artifact_id };
+  if (a.artifact_type === "profile") return { kind: "profile", profileId: a.artifact_id };
+  return { kind: "job", jobId: a.artifact_id };
 }
 
 function inputPreview(input: unknown): string {
@@ -174,6 +180,99 @@ function ToolRow({ call, result }: { call: Msg | null; result: Msg | null }) {
         )}
       </div>
     </details>
+  );
+}
+
+// Per-turn thumbs on the model's response — the pointwise SFT signal. Clicking
+// the active thumb again clears it. Rendered once at the end of each completed
+// turn (never on the live, still-streaming turn).
+function FeedbackBar({
+  rating,
+  onRate,
+}: {
+  rating: Rating | null;
+  onRate: (r: Rating | null) => void;
+}) {
+  const btn = (r: Rating, label: string, Icon: typeof ThumbsUp) => (
+    <button
+      title={label}
+      onClick={() => onRate(rating === r ? null : r)}
+      className={cn(
+        "rounded-base border-2 p-1 transition-colors",
+        rating === r
+          ? "bg-main border-border"
+          : "border-transparent opacity-40 hover:opacity-100 hover:border-border/40",
+      )}
+    >
+      <Icon className="size-3.5" />
+    </button>
+  );
+  return (
+    <div className="flex items-center gap-1 pt-1 pl-1">
+      {btn("up", "Good response", ThumbsUp)}
+      {btn("down", "Bad response", ThumbsDown)}
+    </div>
+  );
+}
+
+// A defect-alert card — the model's output: its input chamber frame with the
+// anomaly maps composited on top (maps span the full square input, so a simple
+// stacked overlay registers pixel-for-pixel). "Address" marks the shared alert
+// resolved for every conversation on this build.
+function AlertCard({
+  alert,
+  onAddress,
+}: {
+  alert: BuildAlert;
+  onAddress: () => void;
+}) {
+  const eventId = alert.snapshot?.input_frame_event_id ?? alert.event_id;
+  const maps = alert.snapshot?.maps_png ?? {};
+  const addressed = alert.status !== "new";
+  return (
+    <div className="border-2 border-red-500 rounded-base bg-red-50 dark:bg-red-950/40 shadow-shadow p-2 flex flex-col gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[9px] font-mono uppercase tracking-wider opacity-60">
+          defect alert · build {alert.build_id}
+          {alert.layer != null ? ` · layer ${alert.layer}` : ""}
+        </span>
+        <div className="flex gap-1 flex-wrap">
+          {alert.alerts.map((a) => (
+            <span key={a} className="text-[10px] font-mono border border-red-500 rounded-base px-1 bg-red-100 dark:bg-red-900">
+              {a}
+            </span>
+          ))}
+        </div>
+      </div>
+      {/* input frame + overlay */}
+      <div className="relative w-full max-w-xs border-2 border-border overflow-hidden">
+        <img
+          src={`/defect/frames/input/${eventId}`}
+          alt="chamber input frame"
+          className="block w-full"
+          onError={(e) => ((e.currentTarget.style.display = "none"))}
+        />
+        {Object.entries(maps).map(([cls, b64]) => (
+          <img
+            key={cls}
+            src={`data:image/png;base64,${b64}`}
+            alt={`${cls} anomaly map`}
+            className="pointer-events-none absolute inset-0 w-full h-full mix-blend-screen opacity-70"
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        {addressed ? (
+          <span className="text-[10px] font-mono text-green-700 dark:text-green-400">
+            addressed{alert.addressed_by_conversation_id ? ` in conv ${alert.addressed_by_conversation_id}` : ""}
+          </span>
+        ) : (
+          <Button size="sm" variant="default" onClick={onAddress}>
+            Mark addressed
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -379,13 +478,27 @@ export function ConversationPage() {
 function ExistingConversation({ id }: { id: string }) {
   const location = useLocation();
   const navigate = useNavigate();
+  // The artifact tab the operator has focused (ArtifactSplit writes it here).
+  // Sent with each message as `focus` so the agent's artifact_list sees what's
+  // on screen; also pinned to the turn's user-message meta server-side.
+  const [searchParams] = useSearchParams();
   const [data, setData] = useState<ConversationData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState<Msg[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
+  // response ratings keyed by turn number; synced from the server, then
+  // optimistically updated on click
+  const [ratings, setRatings] = useState<Record<number, Rating | null>>({});
+  // build-scoped defect alerts for this conversation's attached build(s)
+  const [alerts, setAlerts] = useState<BuildAlert[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  // aborts the in-flight SSE fetch so Stop unsticks the client even if the
+  // stream is half-open (e.g. the broker restarted mid-turn)
+  const abortRef = useRef<AbortController | null>(null);
+  // seconds elapsed in the current turn, for the live activity indicator
+  const [elapsed, setElapsed] = useState(0);
 
   // keep the composer height in sync with its content (also resets it after a
   // send clears `input`)
@@ -394,19 +507,15 @@ function ExistingConversation({ id }: { id: string }) {
   }, [input]);
 
   // ── right-hand artifact panel ──
-  // The conversation's artifacts: every job the transcript referenced (as tabs)
-  // plus the live Mission Control feed while a print runs. ArtifactSplit owns
-  // ordering / auto-switch / open-close / resize; here we only produce the list.
-  const printing = useIsPrinting();
-  const jobIds = useMemo(
-    () => deriveJobIds([...(data?.messages ?? []), ...(live ?? [])]),
-    [data?.messages, live],
+  // The conversation's artifacts: the agent-curated pinned set (jobs, builds,
+  // profiles). The live Mission Control feed is added globally in the app shell
+  // while a print runs (not here), so it shows on every page's panel.
+  // ArtifactSplit owns ordering / auto-switch / open-close / resize and the
+  // URL-backed active tab; here we only produce the list.
+  const artifacts = useMemo<Artifact[]>(
+    () => (data?.artifacts ?? []).map(convArtifactToArtifact),
+    [data?.artifacts],
   );
-  const artifacts = useMemo<Artifact[]>(() => {
-    const list: Artifact[] = jobIds.map((jobId) => ({ kind: "job", jobId }));
-    if (printing) list.push({ kind: "chamber" });
-    return list;
-  }, [jobIds, printing]);
   useSetArtifacts(artifacts);
 
   const load = useCallback(async () => {
@@ -425,6 +534,119 @@ function ExistingConversation({ id }: { id: string }) {
       cancelled = true;
     };
   }, [load]);
+
+  // hydrate response ratings from the loaded conversation
+  useEffect(() => {
+    const map: Record<number, Rating | null> = {};
+    for (const f of data?.feedback ?? []) {
+      if (f.target_kind === "response" && (f.rating === "up" || f.rating === "down")) {
+        map[Number(f.target_id)] = f.rating;
+      }
+    }
+    setRatings(map);
+  }, [data?.feedback]);
+
+  // tick an elapsed-seconds counter while a turn runs (reset when it ends)
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  // What the model is doing right now, inferred from the last streamed event —
+  // so the indicator reads "calling profile_get" / "writing" instead of a
+  // static "thinking". Tool names may be namespaced (mcp__srv__tool); show the
+  // bare tool.
+  const liveActivity = useMemo(() => {
+    const last = live && live.length > 0 ? live[live.length - 1] : null;
+    if (!last) return "thinking";
+    if (last.kind === "tool_call") {
+      const n = last.tool_name ?? "tool";
+      const bare = n.includes("__") ? n.slice(n.lastIndexOf("__") + 2) : n;
+      return `calling ${bare}`;
+    }
+    if (last.kind === "tool_result") return "reading result";
+    if (last.kind === "assistant") return "writing";
+    return "thinking";
+  }, [live]);
+
+  // thumbs on a model response (per turn) — optimistic; clicking the active
+  // thumb passes null, which clears the row server-side
+  const rate = async (turn: number, r: Rating | null) => {
+    setRatings((prev) => ({ ...prev, [turn]: r }));
+    try {
+      await fetch(`/agent/conversations/${id}/feedback`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target_kind: "response", target_id: turn, rating: r }),
+      });
+    } catch {
+      /* next load re-syncs true state */
+    }
+  };
+
+  // Poll build-scoped defect alerts for this conversation's attached build(s).
+  // The bell/silence toggle (below) controls whether they SURFACE, not whether
+  // we fetch — status is shared, so we keep it current either way.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/agent/conversations/${id}/alerts`);
+        if (!r.ok || cancelled) return;
+        const d = (await r.json()) as { alerts?: BuildAlert[] };
+        if (!cancelled) setAlerts(d.alerts ?? []);
+      } catch { /* broker unreachable — next tick retries */ }
+    };
+    void tick();
+    const t = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [id]);
+
+  // Mark a shared alert addressed — reflects in every conversation on the build.
+  const addressAlert = async (alertId: number) => {
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.id === alertId
+          ? { ...a, status: "addressed", addressed_by_conversation_id: Number(id) }
+          : a,
+      ),
+    );
+    try {
+      await fetch(`/agent/alerts/${alertId}/address`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "addressed", conversation_id: Number(id) }),
+      });
+    } catch { /* next poll re-syncs */ }
+  };
+
+  // Bell / silence — per-conversation mute for defect notifications. Optimistic;
+  // PATCH persists it (the poll/load re-syncs on failure).
+  const toggleMute = async () => {
+    if (!data) return;
+    const next = !data.conversation.alerts_muted;
+    setData({ ...data, conversation: { ...data.conversation, alerts_muted: next } });
+    try {
+      const r = await fetch(`/agent/conversations/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alerts_muted: next }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch {
+      setData((d) =>
+        d ? { ...d, conversation: { ...d.conversation, alerts_muted: !next } } : d,
+      );
+    }
+  };
 
   const interactive = data?.conversation.role === "chat";
 
@@ -507,11 +729,15 @@ function ExistingConversation({ id }: { id: string }) {
       { turn, seq: 0, ts: "", kind: "user", content: message, tool_name: null, tool_input: null, is_error: null },
     ];
     setLive([...acc]);
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
+      const focus = searchParams.get("artifact") ?? undefined;
       const r = await fetch(`/agent/conversations/${id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, focus }),
+        signal: ac.signal,
       });
       if (!r.ok || !r.body) {
         throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
@@ -541,10 +767,26 @@ function ExistingConversation({ id }: { id: string }) {
       await load();
       refreshConversations(); // first turn gives the sidebar its title
     } catch (e) {
-      setErr(String((e as Error).message ?? e));
+      // an aborted fetch is a deliberate Stop, not an error
+      if ((e as Error)?.name !== "AbortError") setErr(String((e as Error).message ?? e));
+      await load().catch(() => {}); // pull whatever partial turn was recorded
     } finally {
+      abortRef.current = null;
       setLive(null);
       setBusy(false);
+    }
+  };
+
+  // stop the in-flight turn — kill the broker's CLI process AND abort the local
+  // SSE fetch, so the client unsticks immediately even if the stream is
+  // half-open (e.g. the broker was restarted mid-turn). send()'s finally clears
+  // busy and pulls the partial turn.
+  const stop = async () => {
+    abortRef.current?.abort();
+    try {
+      await fetch(`/agent/conversations/${id}/stop`, { method: "POST" });
+    } catch {
+      /* server may already be gone; the local abort already freed the UI */
     }
   };
 
@@ -574,10 +816,40 @@ function ExistingConversation({ id }: { id: string }) {
 
   const { conversation: c, messages, builds } = data;
   const items = groupMessages(live ? [...messages, ...live] : messages);
+  // only persisted turns get a thumbs bar — never the live, still-streaming one
+  const persistedMaxTurn = messages.at(-1)?.turn ?? 0;
   let prevTurn = 0;
+
+  const muted = c.alerts_muted;
+  const activeAlerts = alerts.filter((a) => a.status === "new");
+  // the bell rides in the breadcrumb row (rendered by the app shell)
+  const breadcrumbSlot =
+    typeof document !== "undefined" ? document.getElementById("breadcrumb-actions") : null;
 
   return (
     <div className="h-full min-h-0 flex flex-col">
+      {/* bell / silence — per-conversation defect-alert mute, in the breadcrumb row */}
+      {breadcrumbSlot &&
+        createPortal(
+          <button
+            onClick={() => void toggleMute()}
+            title={
+              muted
+                ? "Defect alerts silenced for this conversation — click to enable"
+                : "Defect alerts on — click to silence"
+            }
+            className={cn(
+              "flex items-center gap-1 rounded-base border-2 px-2 py-1 text-[10px] font-mono uppercase",
+              muted
+                ? "border-border/40 opacity-50 hover:opacity-100"
+                : "bg-main border-border",
+            )}
+          >
+            {muted ? <BellOff className="size-3.5" /> : <Bell className="size-3.5" />}
+            {activeAlerts.length > 0 && !muted ? activeAlerts.length : null}
+          </button>,
+          breadcrumbSlot,
+        )}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
         <div className="p-4 max-w-3xl mx-auto">
           {/* slim header — metadata only, transcript flows unboxed below */}
@@ -651,6 +923,9 @@ function ExistingConversation({ id }: { id: string }) {
               const turn = itemTurn(it);
               const newTurn = turn !== prevTurn && prevTurn !== 0;
               prevTurn = turn;
+              // last row of a completed turn gets the response thumbs
+              const lastOfTurn = i === items.length - 1 || itemTurn(items[i + 1]) !== turn;
+              const showFeedback = lastOfTurn && turn > 0 && turn <= persistedMaxTurn;
               return (
                 <div key={i}>
                   {newTurn && (
@@ -661,17 +936,42 @@ function ExistingConversation({ id }: { id: string }) {
                     </div>
                   )}
                   {it.type === "tool" ? <ToolRow call={it.call} result={it.result} /> : <MessageItem m={it.msg} />}
+                  {showFeedback && (
+                    <FeedbackBar rating={ratings[turn] ?? null} onRate={(r) => void rate(turn, r)} />
+                  )}
                 </div>
               );
             })}
             {busy && (
-              <div className="border-2 border-dashed border-border rounded-base px-2 py-3 text-center font-mono text-xs animate-pulse">
-                {c.harness} thinking…
+              <div className="border-2 border-dashed border-border rounded-base px-3 py-2 flex items-center gap-2 font-mono text-xs">
+                <span className="inline-flex gap-0.5" aria-hidden>
+                  <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
+                  <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
+                  <span className="size-1.5 rounded-full bg-current animate-bounce" />
+                </span>
+                <span className="font-heading">{c.harness}</span>
+                <span className="opacity-80">{liveActivity}…</span>
+                <span className="ml-auto tabular-nums opacity-50">
+                  {elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`}
+                  {elapsed >= 45 && (
+                    <span className="ml-1 opacity-70">· taking a while, you can Stop</span>
+                  )}
+                </span>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {!muted && activeAlerts.length > 0 && (
+        <div className="border-t-2 border-red-500 shrink-0">
+          <div className="max-w-3xl mx-auto p-2 flex flex-col gap-2">
+            {activeAlerts.map((a) => (
+              <AlertCard key={a.id} alert={a} onAddress={() => void addressAlert(a.id)} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {interactive && pendingApprovals.length > 0 && (
         <div className="border-t-2 border-amber-500 shrink-0">
@@ -721,9 +1021,15 @@ function ExistingConversation({ id }: { id: string }) {
               placeholder={`Message ${c.harness}…`}
               className="flex-1 resize-none min-h-0 max-h-40 text-xs font-mono"
             />
-            <Button onClick={() => void send()} disabled={!input.trim() || busy} variant="default" size="sm">
-              Send
-            </Button>
+            {busy ? (
+              <Button onClick={() => void stop()} variant="neutral" size="sm" title="Stop this turn">
+                Stop
+              </Button>
+            ) : (
+              <Button onClick={() => void send()} disabled={!input.trim()} variant="default" size="sm">
+                Send
+              </Button>
+            )}
           </div>
           {err && <div className="max-w-3xl mx-auto px-2 pb-1 text-red-600 text-[10px]">{err}</div>}
         </div>

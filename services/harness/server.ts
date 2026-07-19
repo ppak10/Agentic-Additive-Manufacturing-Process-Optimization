@@ -89,6 +89,9 @@ interface Chat {
   dir: string;
   turn: number;
   busy: boolean;
+  // The CLI process for the in-flight turn, so a Stop request can kill it.
+  // Set while a turn runs, cleared on close.
+  child?: ReturnType<typeof spawn> | null;
 }
 
 const chats = new Map<string, Chat>();
@@ -157,6 +160,10 @@ function runTurn(
   message: string,
   emit: (ev: Ev) => void,
   timeoutMs?: number,
+  // "type:id" of the artifact focused in the panel when this turn was sent.
+  // Injected as AGENTIC_FOCUS so the MCP artifact_list tool can report what
+  // the operator is looking at (fresh spawn per turn → env is the channel).
+  focus?: string,
 ): Promise<{ res: TurnResult; stdout: string; stderr: string }> {
   const cmd = buildCmd(chat, message);
   const child = spawn(cmd[0], cmd.slice(1), {
@@ -169,9 +176,11 @@ function runTurn(
       ...(chat.conversationId != null
         ? { AGENTIC_CONVERSATION_ID: String(chat.conversationId) }
         : {}),
+      ...(focus ? { AGENTIC_FOCUS: focus } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  chat.child = child; // exposed so POST …/stop can kill this turn
   // Panel candidates run four CLIs in parallel — a hung one must not wedge
   // the whole turn. SIGKILL surfaces as a normal close (exitCode null → -1).
   const killer = timeoutMs
@@ -217,6 +226,7 @@ function runTurn(
   return new Promise((resolve) => {
     child.on("close", (code) => {
       if (killer) clearTimeout(killer);
+      chat.child = null;
       res.exitCode = code ?? -1;
       // Plain-text harnesses (opencode, agy): whole stdout is the reply.
       if (!sawStructured && stdout.trim()) {
@@ -267,6 +277,98 @@ async function recordTurn(
 }
 
 // (transcript_path values are relative to sessionsRoot(); see store.ts)
+
+// ---------------------------------------------------------------------------
+// Build-scoped defect-alert watcher. Polls the recorder's events for alerting
+// defect_detection rows and, for each, freezes a self-contained snapshot
+// (nearest chamber frame + recent telemetry + object set + defect maps) into
+// build_alerts. Conversations that have the build attached as an artifact then
+// render and address these — one shared row per event, so addressing in one
+// conversation reflects in all. This replaced panel mode's auto-fan-out
+// (2026-07-19): alerts never create or drive a conversation on their own.
+
+interface DefectEventRow {
+  id: number;
+  build_id: number | null;
+  ts: string;
+  payload: Record<string, any> | null;
+}
+
+// The snapshot is the defect model's own output: the exact input chamber frame
+// it ran on + its anomaly overlay — the state it flagged. The input frame is
+// served by the defect bridge keyed by event id (GET /defect/frames/input/
+// :eventId), saved there at inference time; the overlay (maps_png) is already
+// in the event payload. No recorder-DB lookup: during a live print frames /
+// telemetry aren't imported into Postgres yet (they're on the NVMe spool).
+function assembleSnapshot(ev: DefectEventRow): Record<string, unknown> {
+  return {
+    input_frame_event_id: ev.id,
+    maps_png: ev.payload?.maps_png ?? null,
+  };
+}
+
+function startAlertWatcher(p: pg.Pool): void {
+  void ensureStoreSchema(p).catch(() => {});
+  let lastEventId: number | null = null;
+  setInterval(() => {
+    void (async () => {
+      try {
+        if (lastEventId === null) {
+          // start from "now" — never replay historical alerts on boot
+          const { rows } = await p.query(`SELECT coalesce(max(id), 0) AS id FROM events`);
+          lastEventId = Number(rows[0]?.id ?? 0);
+          return;
+        }
+        const { rows } = await p.query(
+          `SELECT id, build_id, ts, payload FROM events
+           WHERE kind = 'defect_detection' AND id > $1
+             AND jsonb_array_length(payload->'alerts') > 0
+           ORDER BY id`,
+          [lastEventId],
+        );
+        // advance past everything seen this poll, alerting or not
+        const { rows: maxRows } = await p.query(
+          `SELECT coalesce(max(id), $1) AS id FROM events WHERE id > $1`,
+          [lastEventId],
+        );
+        const maxSeen = Number(maxRows[0]?.id ?? lastEventId);
+        for (const ev of rows as DefectEventRow[]) {
+          const alertClasses: string[] = ev.payload?.alerts ?? [];
+          const alertKey = [...alertClasses].sort().join(",");
+          // Dedup first: if this (build, class-set) already has an OPEN alert,
+          // skip — including the snapshot capture, which is the expensive part.
+          const { rows: dup } = await p.query(
+            `SELECT 1 FROM build_alerts
+             WHERE build_id = $1 AND alert_key = $2 AND status = 'new' LIMIT 1`,
+            [ev.build_id, alertKey],
+          );
+          if (dup[0]) continue;
+          const snapshot = assembleSnapshot(ev);
+          await p.query(
+            `INSERT INTO build_alerts
+               (event_id, build_id, ts, layer, z2, alerts, alert_key, scores, snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (build_id, alert_key) WHERE status = 'new' DO NOTHING`,
+            [
+              ev.id,
+              ev.build_id,
+              ev.ts,
+              ev.payload?.layer ?? null,
+              ev.payload?.z2 ?? null,
+              alertClasses,
+              alertKey,
+              JSON.stringify(ev.payload?.scores ?? {}),
+              JSON.stringify(snapshot),
+            ],
+          );
+        }
+        lastEventId = maxSeen;
+      } catch (err) {
+        console.error("alert watcher:", (err as Error)?.message);
+      }
+    })();
+  }, 5000);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -355,6 +457,26 @@ app.post<{ Body: { harness: Harness; debug?: boolean } }>(
         transcriptDir: path.basename(chat.dir),
         debug: debug === true,
       });
+      // Auto-attach the currently-printing build as a build artifact so a
+      // conversation opened during a print is subscribed to that build's defect
+      // alerts (and gets its live status view). A real, removable artifact row;
+      // no-op when nothing is printing.
+      try {
+        const { rows: ab } = await pool.query(
+          `SELECT id FROM builds WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+        );
+        if (ab[0]?.id != null) {
+          await pool.query(
+            `INSERT INTO conversation_artifacts
+               (conversation_id, artifact_type, artifact_id, provenance, attached_by)
+             VALUES ($1, 'build', $2, 'referenced', 'system')
+             ON CONFLICT (conversation_id, artifact_type, artifact_id) DO NOTHING`,
+            [chat.conversationId, String(ab[0].id)],
+          );
+        }
+      } catch (err) {
+        console.error("auto-attach active build failed:", (err as Error)?.message);
+      }
     }
     chats.set(id, chat);
     return {
@@ -369,11 +491,11 @@ app.post<{ Body: { harness: Harness; debug?: boolean } }>(
 // conversationId-keyed routes.
 async function streamChatTurn(
   chat: Chat,
-  body: { message?: string; context?: string } | undefined,
+  body: { message?: string; context?: string; focus?: string } | undefined,
   reply: import("fastify").FastifyReply,
 ) {
   if (chat.busy) return reply.code(409).send({ error: "turn in progress" });
-  const { message, context } = body ?? {};
+  const { message, context, focus } = body ?? {};
   if (!message?.trim()) return reply.code(400).send({ error: "empty message" });
 
   chat.busy = true;
@@ -397,14 +519,14 @@ async function streamChatTurn(
   const fullMessage = parts.join("\n\n");
 
   try {
-    const r = await runTurn(chat, fullMessage, emit);
+    const r = await runTurn(chat, fullMessage, emit, undefined, focus);
     chat.cliSessionId = r.res.cliSessionId;
     await recordTurn(chat, message, startedAt, r).catch((err) =>
       console.error("recordTurn failed:", err?.message),
     );
     if (pool && chat.conversationId != null) {
       await insertTurnMessages(
-        pool, chat.conversationId, chat.turn, message, context, events,
+        pool, chat.conversationId, chat.turn, message, context, events, focus,
       ).catch((err) => console.error("insertTurnMessages failed:", err?.message));
       await finalizeConversation(pool, chat.conversationId, {
         model: r.res.model,
@@ -428,7 +550,7 @@ async function streamChatTurn(
   return reply;
 }
 
-app.post<{ Params: { id: string }; Body: { message: string; context?: string } }>(
+app.post<{ Params: { id: string }; Body: { message: string; context?: string; focus?: string } }>(
   "/agent/chats/:id/messages",
   async (req, reply) => {
     const chat = chats.get(req.params.id);
@@ -474,7 +596,7 @@ async function chatForConversation(convId: number): Promise<Chat | "gone" | null
   return chat;
 }
 
-app.post<{ Params: { id: string }; Body: { message: string; context?: string } }>(
+app.post<{ Params: { id: string }; Body: { message: string; context?: string; focus?: string } }>(
   "/agent/conversations/:id/messages",
   async (req, reply) => {
     if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
@@ -485,6 +607,32 @@ app.post<{ Params: { id: string }; Body: { message: string; context?: string } }
       return reply.code(404).send({ error: `no chat conversation ${convId}` });
     }
     return streamChatTurn(chat, req.body, reply);
+  },
+);
+
+// Stop the in-flight turn for a conversation — kills the CLI process. Its close
+// handler then finalizes the PARTIAL turn (whatever streamed so far is recorded
+// and the SSE stream ends normally), and the chat frees up for the next message.
+app.post<{ Params: { id: string } }>(
+  "/agent/conversations/:id/stop",
+  async (req, reply) => {
+    const convId = Number(req.params.id);
+    if (!Number.isFinite(convId)) return reply.code(400).send({ error: "bad id" });
+    const chat = [...chats.values()].find((c) => c.conversationId === convId);
+    if (!chat || !chat.busy || !chat.child) {
+      return reply.code(409).send({ error: "no turn in progress" });
+    }
+    const child = chat.child;
+    child.kill("SIGTERM");
+    // Escalate if the CLI ignores SIGTERM (some spawn child shells do).
+    setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }, 2000);
+    return { ok: true, stopped: true };
   },
 );
 
@@ -521,7 +669,7 @@ app.get<{ Params: { id: string } }>("/agent/conversations/:id", async (req, repl
   if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
   const id = Number(req.params.id);
   const { rows } = await pool.query(
-    `SELECT id, created_at, harness, role, model, build_id, debug
+    `SELECT id, created_at, harness, role, model, build_id, debug, alerts_muted
      FROM agent_conversations WHERE id = $1`,
     [id],
   );
@@ -536,30 +684,178 @@ app.get<{ Params: { id: string } }>("/agent/conversations/:id", async (req, repl
     `SELECT build_id FROM conversation_builds WHERE conversation_id = $1 ORDER BY build_id`,
     [id],
   );
-  return { conversation: rows[0], messages, builds: builds.map((b) => Number(b.build_id)) };
+  // The agent-curated artifact panel (artifact_* MCP tools). Ordered oldest→
+  // newest so the panel keeps a stable first-seen tab order; the web resolves
+  // each id to a job/build/profile view.
+  const { rows: artifacts } = await pool.query(
+    `SELECT artifact_type, artifact_id, provenance, attached_by, note, attached_at
+     FROM conversation_artifacts WHERE conversation_id = $1
+     ORDER BY attached_at, artifact_type, artifact_id`,
+    [id],
+  );
+  // Pointwise feedback (thumbs on responses, later action ratings) so the UI
+  // can reflect what's already rated. Tolerate a missing table (pre-migration).
+  let feedback: unknown[] = [];
+  try {
+    const { rows: fb } = await pool.query(
+      `SELECT target_kind, target_id, rating, correction, note
+       FROM feedback WHERE conversation_id = $1 AND status = 'active'`,
+      [id],
+    );
+    feedback = fb;
+  } catch (err) {
+    if ((err as { code?: string }).code !== "42P01") throw err;
+  }
+  return {
+    conversation: rows[0],
+    messages,
+    builds: builds.map((b) => Number(b.build_id)),
+    artifacts,
+    feedback,
+  };
+});
+
+// Pointwise feedback upsert — thumbs on a model response (target_kind
+// 'response', target_id = turn number), later extended to action ratings.
+// rating=null clears (deletes) the row so the UI can toggle a thumb off.
+app.post<{
+  Params: { id: string };
+  Body: {
+    target_kind?: string;
+    target_id?: string | number;
+    rating?: string | null;
+    correction?: string;
+    note?: string;
+  };
+}>("/agent/conversations/:id/feedback", async (req, reply) => {
+  if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+  const convId = Number(req.params.id);
+  if (!Number.isFinite(convId)) return reply.code(400).send({ error: "bad id" });
+  const { target_kind, target_id, rating, correction, note } = req.body ?? {};
+  if (!target_kind || target_id == null) {
+    return reply.code(400).send({ error: "target_kind and target_id are required" });
+  }
+  await ensureStoreSchema(pool);
+  const tid = String(target_id);
+  try {
+    if (rating == null && correction == null && note == null) {
+      await pool.query(
+        `DELETE FROM feedback
+         WHERE conversation_id = $1 AND target_kind = $2 AND target_id = $3`,
+        [convId, target_kind, tid],
+      );
+      return { ok: true, cleared: true };
+    }
+    await pool.query(
+      `INSERT INTO feedback
+         (created_by, conversation_id, target_kind, target_id, rating, correction, note)
+       VALUES ('operator', $1, $2, $3, $4, $5, $6)
+       ON CONFLICT (conversation_id, target_kind, target_id)
+       DO UPDATE SET rating = EXCLUDED.rating,
+                     correction = COALESCE(EXCLUDED.correction, feedback.correction),
+                     note = COALESCE(EXCLUDED.note, feedback.note),
+                     status = 'active', ts = now()`,
+      [convId, target_kind, tid, rating ?? null, correction ?? null, note ?? null],
+    );
+    return { ok: true, rating: rating ?? null };
+  } catch (err) {
+    return reply.code(500).send({ error: String((err as Error)?.message ?? err) });
+  }
+});
+
+// Build-scoped defect alerts for a conversation — every alert on any build the
+// conversation has attached as an artifact. One shared row per event, so two
+// conversations on the same build see the same alerts and the same status.
+app.get<{ Params: { id: string } }>(
+  "/agent/conversations/:id/alerts",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad id" });
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, event_id, build_id, ts, layer, z2, alerts, scores, snapshot,
+                status, addressed_by_conversation_id, addressed_at
+         FROM build_alerts
+         WHERE build_id IN (
+           SELECT artifact_id::bigint FROM conversation_artifacts
+           WHERE conversation_id = $1 AND artifact_type = 'build'
+             AND artifact_id ~ '^[0-9]+$'
+         )
+         ORDER BY id DESC LIMIT 50`,
+        [id],
+      );
+      return { alerts: rows };
+    } catch (err) {
+      if ((err as { code?: string }).code === "42P01") return { alerts: [] };
+      throw err;
+    }
+  },
+);
+
+// Address / dismiss / reopen a build alert. Shared: the update lands on the one
+// build_alerts row, so it reflects in every conversation that has the build
+// attached. status='new' clears the addressed markers (reopen).
+app.post<{
+  Params: { id: string };
+  Body: { status?: string; conversation_id?: number };
+}>("/agent/alerts/:id/address", async (req, reply) => {
+  if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad id" });
+  const status = req.body?.status ?? "addressed";
+  if (!["new", "addressed", "dismissed"].includes(status)) {
+    return reply.code(400).send({ error: "status must be new|addressed|dismissed" });
+  }
+  const convId = req.body?.conversation_id ?? null;
+  try {
+    const { rows } = await pool.query(
+      `UPDATE build_alerts
+       SET status = $2,
+           addressed_by_conversation_id = CASE WHEN $2 = 'new' THEN NULL ELSE $3::bigint END,
+           addressed_at = CASE WHEN $2 = 'new' THEN NULL ELSE now() END
+       WHERE id = $1 RETURNING id, status`,
+      [id, status, convId],
+    );
+    if (!rows[0]) return reply.code(404).send({ error: `no alert ${id}` });
+    return { ok: true, id, status: rows[0].status };
+  } catch (err) {
+    return reply.code(500).send({ error: String((err as Error)?.message ?? err) });
+  }
 });
 
 // Toggle the debug flag — debug conversations are excluded from the
 // Conversations dataset export (the learning loop). Flipping it also
 // covers a panel's candidates (parent_id) so the whole tree stays out.
-app.patch<{ Params: { id: string }; Body: { debug?: boolean } }>(
+app.patch<{ Params: { id: string }; Body: { debug?: boolean; alerts_muted?: boolean } }>(
   "/agent/conversations/:id",
   async (req, reply) => {
     if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
     const id = Number(req.params.id);
-    const debug = req.body?.debug;
-    if (typeof debug !== "boolean") {
-      return reply.code(400).send({ error: "body must set debug: boolean" });
+    const { debug, alerts_muted } = req.body ?? {};
+    if (typeof debug !== "boolean" && typeof alerts_muted !== "boolean") {
+      return reply.code(400).send({ error: "body must set debug and/or alerts_muted (boolean)" });
     }
-    const { rows } = await pool.query(
-      `UPDATE agent_conversations SET debug = $2
-       WHERE id = $1 OR parent_id = $1 RETURNING id`,
-      [id, debug],
-    );
-    if (!rows.some((r) => Number(r.id) === id)) {
-      return reply.code(404).send({ error: `no conversation ${id}` });
+    // debug cascades to a panel's candidates (parent_id); alerts_muted is
+    // per-conversation only (the breadcrumb bell/silence).
+    if (typeof debug === "boolean") {
+      const { rows } = await pool.query(
+        `UPDATE agent_conversations SET debug = $2
+         WHERE id = $1 OR parent_id = $1 RETURNING id`,
+        [id, debug],
+      );
+      if (!rows.some((r) => Number(r.id) === id)) {
+        return reply.code(404).send({ error: `no conversation ${id}` });
+      }
     }
-    return { ok: true, debug, updated: rows.length };
+    if (typeof alerts_muted === "boolean") {
+      const { rows } = await pool.query(
+        `UPDATE agent_conversations SET alerts_muted = $2 WHERE id = $1 RETURNING id`,
+        [id, alerts_muted],
+      );
+      if (!rows[0]) return reply.code(404).send({ error: `no conversation ${id}` });
+    }
+    return { ok: true, debug, alerts_muted };
   },
 );
 
@@ -734,3 +1030,7 @@ registerPanelRoutes(app, {
 
 await app.listen({ port: PORT, host: "127.0.0.1" });
 console.error(`agent broker on :${PORT} (db: ${pool ? "yes" : "NO"})`);
+
+// Build-scoped defect-alert watcher — writes build_alerts for conversations
+// subscribed via an attached build artifact (needs the recorder's events).
+if (pool) startAlertWatcher(pool);

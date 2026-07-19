@@ -19,6 +19,9 @@ export default defineConfig({
       "/api/temperature/bedmatrix/stream": { target: "ws://localhost:3000", ws: true },
       "/api/movement/position/stream": { target: "ws://localhost:3000", ws: true },
       "/api/camera/chamber/stream": { target: "ws://localhost:3000", ws: true },
+      // Task runner (services/pipeline/agentic_sls/tasks, :3300) — MUST precede
+      // the generic /api → recorder entry (first prefix match wins).
+      "/api/tasks": { target: "http://localhost:3300" },
       "/api": { target: "http://localhost:3000" },
       "/healthz": { target: "http://localhost:3000" },
       // Agent session broker (harness/server.ts) — separate process from

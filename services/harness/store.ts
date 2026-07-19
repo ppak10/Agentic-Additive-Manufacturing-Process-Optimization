@@ -115,6 +115,28 @@ CREATE TABLE IF NOT EXISTS conversation_builds (
   PRIMARY KEY (conversation_id, build_id)
 );
 
+-- Agent-curated artifact panel (2026-07-19). DISTINCT from conversation_builds:
+-- that table auto-records every build a conversation *spanned* (panel trackBuild
+-- + registry telemetry); this one is the deliberate working set the AGENT pins
+-- for the operator's right-hand panel via the artifact_* MCP tools. An artifact
+-- may be pinned without ever running here (referencing an old job/profile), and
+-- a build may span the chat without being pinned. artifact_id is TEXT so one
+-- column holds both numeric build ids and job/profile UUIDs. provenance marks
+-- whether the agent *created* it in this conversation (auto-attached on
+-- job_create_from_template) or merely *referenced* an existing one.
+CREATE TABLE IF NOT EXISTS conversation_artifacts (
+  conversation_id BIGINT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+  artifact_type   TEXT NOT NULL,                       -- 'build' | 'job' | 'profile'
+  artifact_id     TEXT NOT NULL,
+  provenance      TEXT NOT NULL DEFAULT 'referenced',  -- 'created' | 'referenced'
+  attached_by     TEXT NOT NULL DEFAULT 'agent',       -- 'agent' | 'operator'
+  note            TEXT,
+  attached_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, artifact_type, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS conversation_artifacts_conv_idx
+  ON conversation_artifacts (conversation_id, attached_at);
+
 CREATE TABLE IF NOT EXISTS agent_selections (
   id                BIGSERIAL PRIMARY KEY,
   conversation_id   BIGINT NOT NULL REFERENCES agent_conversations(id),
@@ -129,6 +151,73 @@ CREATE TABLE IF NOT EXISTS agent_selections (
   decided_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (conversation_id, turn)
 );
+
+-- Pointwise feedback layer (2026-07-19) — the SFT/instruction-tuning counterpart
+-- to agent_selections' pairwise preferences. A polymorphic annotation over the
+-- things worth rating: a model RESPONSE (target_kind='response', target_id=turn
+-- number), and later an LLM action (agent_actions.id) or an operator action
+-- (events.id). The rich training context (conversation slice, frame/temp/defect
+-- window) is NOT stored here — it's reconstructed downstream by (build_id, ts)
+-- join; this row is the pointer + the human signal. The correction column is
+-- the gold "what should have happened instead" (stronger than a bare thumbs-down).
+-- Curated like defect_labels: status active|rejected gates export.
+CREATE TABLE IF NOT EXISTS feedback (
+  id              BIGSERIAL PRIMARY KEY,
+  ts              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by      TEXT,                            -- 'operator' for GUI ratings
+  conversation_id BIGINT REFERENCES agent_conversations(id) ON DELETE CASCADE,
+  target_kind     TEXT NOT NULL,                   -- 'response' | 'agent_action' | 'operator_event'
+  target_id       TEXT NOT NULL,                   -- turn number / agent_actions.id / events.id
+  rating          TEXT,                            -- up|down (responses) · correct|ignored|incorrect|demonstration (actions)
+  correction      TEXT,                            -- gold: what should have happened instead
+  note            TEXT,
+  status          TEXT NOT NULL DEFAULT 'active',  -- active | rejected
+  UNIQUE (conversation_id, target_kind, target_id)
+);
+CREATE INDEX IF NOT EXISTS feedback_conv_idx ON feedback (conversation_id);
+
+-- Build-scoped defect alerts (2026-07-19) — the shared, durable notification a
+-- conversation subscribes to by attaching its build as an artifact. ONE row per
+-- defect_detection event (event_id UNIQUE): every conversation with this build
+-- attached renders the SAME row, so status is shared by construction —
+-- addressing it in one conversation marks it addressed in all of them. The
+-- snapshot is self-contained (frozen chamber frame ref + temps + objects +
+-- defect maps) so the read-only chamber card in a conversation never has to
+-- re-join telemetry, even though the values also live in the raw telemetry.
+CREATE TABLE IF NOT EXISTS build_alerts (
+  id                           BIGSERIAL PRIMARY KEY,
+  event_id                     BIGINT UNIQUE,                -- defect_detection events.id
+  build_id                     BIGINT,
+  ts                           TIMESTAMPTZ NOT NULL,
+  layer                        INT,
+  z2                           DOUBLE PRECISION,
+  alerts                       TEXT[],
+  alert_key                    TEXT,                         -- sorted alert classes, the dedup key
+  scores                       JSONB,
+  snapshot                     JSONB,                        -- { input_frame, maps_png, objects }
+  status                       TEXT NOT NULL DEFAULT 'new',  -- new | addressed | dismissed
+  addressed_by_conversation_id BIGINT,
+  addressed_at                 TIMESTAMPTZ,
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS build_alerts_build_idx ON build_alerts (build_id, id DESC);
+-- Added after the table shipped, so an explicit ALTER (CREATE TABLE IF NOT
+-- EXISTS won't backfill a column on an existing table). Must precede the
+-- partial index below, which references it.
+ALTER TABLE build_alerts ADD COLUMN IF NOT EXISTS alert_key TEXT;
+-- Dedup to one alert per condition EPISODE, not one per layer: while an alert
+-- for this (build, class-set) is still open (status='new'), the same condition
+-- recurring each layer collapses onto it (INSERT … ON CONFLICT DO NOTHING).
+-- Once addressed/dismissed the predicate no longer covers it, so a later
+-- recurrence opens a fresh episode. Raw per-layer model outputs still live in
+-- events for training — build_alerts is the notification/curation layer.
+CREATE UNIQUE INDEX IF NOT EXISTS build_alerts_open_episode_idx
+  ON build_alerts (build_id, alert_key) WHERE status = 'new';
+
+-- Per-conversation defect-notification mute (the breadcrumb bell/silence). When
+-- true the conversation does not surface new build alerts, so a noisy build
+-- doesn't pester every conversation that has it attached.
+ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS alerts_muted BOOLEAN NOT NULL DEFAULT false;
 `;
 
 // Normalized event — same shape the broker streams to the browser.
@@ -304,6 +393,12 @@ export async function insertTurnMessages(
   userMessage: string,
   context: string | undefined,
   events: AgentEvent[],
+  // The artifact the operator had focused in the panel when they sent this
+  // turn (token "type:id", from the URL's ?artifact= param). Pinned onto the
+  // user message's meta so exported transcripts carry the on-screen context
+  // the message was written against — the same value the MCP artifact_list
+  // tool sees live via AGENTIC_FOCUS. Absent when nothing was focused.
+  focus?: string,
 ): Promise<void> {
   let seq = 0;
   const add = (
@@ -312,12 +407,13 @@ export async function insertTurnMessages(
     toolName?: string | null,
     toolInput?: unknown,
     isError?: boolean,
+    meta?: unknown,
   ) =>
     pool.query(
       `INSERT INTO agent_messages
          (conversation_id, turn, seq, kind, content, tool_name, tool_input,
-          is_error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          is_error, meta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (conversation_id, turn, seq) DO NOTHING`,
       [
         conversationId,
@@ -328,11 +424,12 @@ export async function insertTurnMessages(
         toolName ?? null,
         toolInput !== undefined ? JSON.stringify(toolInput) : null,
         isError ?? null,
+        meta !== undefined ? JSON.stringify(meta) : null,
       ],
     );
 
   if (context) await add("context", context);
-  await add("user", userMessage);
+  await add("user", userMessage, null, undefined, undefined, focus ? { focus } : undefined);
   for (const e of events) {
     if (e.type === "text") await add("assistant", e.text ?? "");
     else if (e.type === "tool") await add("tool_call", null, e.name, e.input);

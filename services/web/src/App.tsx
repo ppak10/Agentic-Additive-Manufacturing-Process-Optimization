@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
   MessageSquare,
@@ -37,6 +37,7 @@ import { BuildLayout } from "@/pages/BuildLayout";
 import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
+import { Tasks } from "@/pages/Tasks";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { ServiceDetail } from "@/pages/Services";
 import { MissionControl } from "@/pages/MissionControl";
@@ -49,7 +50,7 @@ import { useJob, type JobStatus } from "@/hooks/useJob";
 import { useConversations } from "@/hooks/useConversations";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
-import { ArtifactSplit, ArtifactProvider, useCurrentArtifacts } from "@/panels/ArtifactPanel";
+import { ArtifactSplit, ArtifactProvider, useCurrentArtifacts, type Artifact } from "@/panels/ArtifactPanel";
 
 const NAV_GROUPS = [
   {
@@ -68,6 +69,7 @@ const MACHINE_ITEMS = [
   { to: "/jobs", label: "Jobs" },
   { to: "/profiles", label: "Print Profiles" },
   { to: "/builds", label: "Builds" },
+  { to: "/tasks", label: "Tasks" },
   { to: "/powder-tuning", label: "Powder Tuning" },
 ] as const;
 
@@ -232,11 +234,21 @@ function AppShell() {
   // The artifact panel is rendered here, at the shell level, so it spans the
   // full main area (beside the breadcrumb row rather than clipped under it).
   // Pages publish their artifacts via useSetArtifacts; we render the one split.
-  const artifacts = useCurrentArtifacts();
+  // The artifact panel is a CONVERSATION-page feature only — it never shows on
+  // the jobs / profiles / builds / mission-control pages. The live build feed is
+  // no longer a standalone global tab: it now rides inside the build artifact
+  // (which renders live "build mission control" while its build is the active
+  // print), so monitoring is deliberate — attach the build. Non-conversation
+  // routes get an empty list → ArtifactSplit shows no panel and no reopen pull.
+  const onConversationPage = location.pathname.startsWith("/conversations");
+  const publishedArtifacts = useCurrentArtifacts();
+  const artifacts = useMemo<Artifact[]>(
+    () => (onConversationPage ? publishedArtifacts : []),
+    [onConversationPage, publishedArtifacts],
+  );
   // per-surface divider width (keying the split also resets its open/close
-  // state when the surface type changes). Only conversations publish an
-  // artifact today; other paths get the generic id and simply show no panel.
-  const artifactStorageId = location.pathname.startsWith("/conversations")
+  // state when the surface type changes).
+  const artifactStorageId = onConversationPage
     ? "conversation-artifact-split"
     : "artifact-split";
 
@@ -271,7 +283,7 @@ function AppShell() {
           <div className="h-full min-h-0 overflow-auto flex flex-col">
           {/* docs-style breadcrumb: top-left of the page content; pages can
               portal actions into the right end of the row (#breadcrumb-actions) */}
-          <div className="px-4 pt-3 shrink-0 flex items-center justify-between gap-2">
+          <div className="px-4 py-3 shrink-0 flex items-center justify-between gap-2">
             <Breadcrumbs />
             <div id="breadcrumb-actions" className="flex items-center gap-2" />
           </div>
@@ -298,6 +310,7 @@ function AppShell() {
                 pattern as /jobs/:id? — two routes would remount the page) */}
             <Route path="/profiles/:id?" element={<PrintProfiles />} />
             <Route path="/jobs/:id?" element={<Jobs />} />
+            <Route path="/tasks/:id?" element={<Tasks />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
             {/* legacy global triage path — now a per-build view under /builds */}

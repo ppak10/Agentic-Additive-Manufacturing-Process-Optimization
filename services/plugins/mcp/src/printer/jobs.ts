@@ -2,7 +2,16 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
 import { withActionLog } from "../actions.js";
+import { attachArtifact } from "./artifacts.js";
 import { errorResult, jsonResult } from "../result.js";
+
+// Auto-pin a just-created job to the conversation's artifact panel so the
+// operator sees the agent's output without a second tool call. Best-effort:
+// the panel is a convenience, never a reason to fail the job creation.
+function conversationId(): number | null {
+  const n = Number(process.env.AGENTIC_CONVERSATION_ID);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 // Stored-job tools — the printer's .s4a job files (name, print profile,
 // nesting instances). Distinct from builds_list/build_get, which read the
@@ -226,6 +235,13 @@ export function registerPrinterJobs(server: McpServer, client: InovaClient) {
             `/jobs/${template_job_id}/clone`,
             { name: cloneName, printProfileId: print_profile_id },
           );
+          // Pin the new job to the conversation panel (provenance='created').
+          const convId = conversationId();
+          if (convId != null && clone.id) {
+            await attachArtifact(convId, "job", clone.id, "created").catch((err) =>
+              console.error("artifact auto-attach failed:", err?.message),
+            );
+          }
           return jsonResult({
             ...clone,
             note:

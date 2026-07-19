@@ -55,6 +55,11 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
     }
     case "powder-tuning":
       return [{ label: "Powder Tuning" }];
+    case "tasks":
+      return [
+        { label: "Tasks", to: "/tasks" },
+        ...(rest[0] ? [{ label: `Task ${rest[0]}` }] : []),
+      ];
     case "conversations":
       return [
         { label: "Conversations" },

@@ -394,82 +394,9 @@ export function registerPanelRoutes(app: FastifyInstance, deps: PanelDeps): void
     return { ok: true, lastSelection: p.lastSelection };
   });
 
-  startEventWatcher(deps);
-}
-
-// ---------------------------------------------------------------------------
-// Event watcher: alerting defect_detection events auto-trigger a DATA turn
-// + fan-out on the console panel (auto-created on first alert). Only the
-// NEWEST alerting event is taken per poll — while a panel turn is busy or
-// awaiting selection, newer alerts supersede older ones rather than queue.
-
-function renderEventText(ev: {
-  id: number; build_id: number | null; message: string | null;
-  payload: Record<string, unknown>;
-}): string {
-  const p = ev.payload;
-  const scores = Object.entries((p.scores as Record<string, number>) ?? {})
-    .map(([k, v]) => `${k}=${v.toFixed(2)}`)
-    .join(", ");
-  return (
-    `Defect model alert (event ${ev.id}) — build ${ev.build_id}, layer ${p.layer}, z2 ${p.z2}: ` +
-    `alerts [${((p.alerts as string[]) ?? []).join(", ")}]; scores {${scores}}. ` +
-    `The operator can confirm/ignore/reject the detection, add recoat passes, ` +
-    `adjust temperatures, or exclude affected parts. What should they do?`
-  );
-}
-
-function startEventWatcher(deps: PanelDeps): void {
-  if (!deps.pool) return;
-  let lastEventId: number | null = null;
-
-  setInterval(() => {
-    void (async () => {
-      if (!deps.pool) return;
-      try {
-        if (lastEventId === null) {
-          // start from "now" — never replay historical alerts on boot
-          const { rows } = await deps.pool.query(`SELECT coalesce(max(id), 0) AS id FROM events`);
-          lastEventId = Number(rows[0]?.id ?? 0);
-          return;
-        }
-        const { rows } = await deps.pool.query(
-          `SELECT id, build_id, message, payload FROM events
-           WHERE kind = 'defect_detection' AND id > $1
-             AND jsonb_array_length(payload->'alerts') > 0
-           ORDER BY id`,
-          [lastEventId],
-        );
-        // advance the cursor past everything seen this poll, alerting or not
-        const { rows: maxRows } = await deps.pool.query(
-          `SELECT coalesce(max(id), $1) AS id FROM events WHERE id > $1`, [lastEventId],
-        );
-        const maxSeen = Number(maxRows[0]?.id ?? lastEventId);
-        if (rows.length === 0) { lastEventId = maxSeen; return; }
-        lastEventId = maxSeen;
-
-        let consolePanel = [...panels.values()].find((p) => p.console);
-        if (!consolePanel) consolePanel = await createPanel(deps, { console: true });
-        if (consolePanel.busy || consolePanel.pending) return; // superseded, not queued
-
-        const ev = rows[rows.length - 1]; // newest alert wins
-        void fanOut(
-          deps,
-          consolePanel,
-          {
-            role: "data",
-            text: renderEventText(ev),
-            meta: {
-              event_id: Number(ev.id),
-              build_id: ev.build_id != null ? Number(ev.build_id) : null,
-              layer: ev.payload?.layer ?? null,
-            },
-          },
-          Number(ev.id),
-        );
-      } catch (err) {
-        console.error("panel event watcher:", (err as Error)?.message);
-      }
-    })();
-  }, 5000);
+  // The defect-alert watcher used to live here and auto-fan-out to a console
+  // panel. As of 2026-07-19 alerts are build-scoped: the broker's alert watcher
+  // (server.ts) writes build_alerts, and conversations that have the build
+  // attached as an artifact render + address them. Panel mode no longer
+  // auto-reacts to defects.
 }

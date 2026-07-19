@@ -11,6 +11,8 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "opencv-python-headless>=4.10",
     "numpy>=1.26",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.urls]
@@ -33,6 +35,11 @@ sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
 sls-export-labels = "agentic_sls.pipeline.export_labels:main"
 sls-backfill-camera-bboxes = "agentic_sls.pipeline.backfill_camera_bboxes:main"
 sls-analyze-build = "agentic_sls.pipeline.analyze_build:main"
+
+# The async task runner (agentic_sls/tasks/): FastAPI + single worker that runs
+# the sls-* jobs in the background, tracked in the Postgres `tasks` table.
+# Runs as the agentic-sls-tasks docker service.
+sls-task-server = "agentic_sls.tasks.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

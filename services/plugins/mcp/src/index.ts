@@ -8,6 +8,7 @@ import { registerPrinterStatus } from "./printer/status.js";
 import { registerPrintingObjects } from "./printer/objects.js";
 import { registerPrinterJobs } from "./printer/jobs.js";
 import { registerPrinterProfiles } from "./printer/profiles.js";
+import { registerPrinterArtifacts } from "./printer/artifacts.js";
 import { registerRecoaterPasses } from "./recoater/passes.js";
 import { registerRecoaterFullPasses } from "./recoater/full.js";
 import { registerLayerOverrides } from "./recoater/overrides.js";
@@ -28,6 +29,7 @@ registerRecoaterFullPasses(server, client);
 registerLayerOverrides(server, client);
 registerPrinterJobs(server, client);
 registerPrinterProfiles(server, client);
+registerPrinterArtifacts(server, client);
 
 // Knowledge tools — recorder Postgres, need DATABASE_URL (read-only).
 registerDataBuilds(server);

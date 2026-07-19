@@ -1,0 +1,35 @@
+# agentic-sls-tasks (:3300) — background runner for the sls-* pipeline jobs.
+# FastAPI + a single sequential worker (concurrency=1, which keeps every job
+# safe: no parallel sls-export JSONL corruption, no same-build races). Records
+# lifecycle in the Postgres `tasks` table and writes a `task_complete` event
+# for the GUI. Safe to restart between jobs; a job running at restart is NOT
+# resumed — re-trigger it.
+#
+# First boot runs `uv sync` (~1 min) into the repo-local .tasks-venv (gitignored,
+# separate from the host .venv); it persists on the bind mount across restarts.
+# Code home is services/pipeline/ (agentic_sls/tasks/); no folder rename.
+services:
+  tasks:
+    build: .
+    container_name: agentic-sls-tasks
+    restart: on-failure
+    network_mode: host
+    user: "1000:1000"
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+    command: ["bash", "-lc", "uv sync --frozen && exec uv run --frozen sls-task-server"]
+    environment:
+      HOME: /tmp
+      DATABASE_URL: ${DATABASE_URL}
+      TASKS_PORT: "3300"
+      REPO_ROOT: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      UV_PROJECT_ENVIRONMENT: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/.tasks-venv
+      UV_CACHE_DIR: /home/ppak/.agentic-sls/uv-cache
+    volumes:
+      - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      - /home/ppak/.agentic-sls:/home/ppak/.agentic-sls
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3300/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s

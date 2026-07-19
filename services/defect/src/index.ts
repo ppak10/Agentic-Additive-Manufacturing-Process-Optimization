@@ -14,12 +14,20 @@
 // accumulated galvo frames server-side.
 
 import http from "node:http";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import pg from "pg";
 import WebSocket from "ws";
 
 const RECORDER_BASE_URL = process.env.RECORDER_BASE_URL ?? "http://127.0.0.1:3000";
 const DEFECT_MODEL_URL = process.env.DEFECT_MODEL_URL ?? "http://128.2.112.20:8100";
 const PORT = Number(process.env.DEFECT_PORT ?? 3200);
+// Where alert INPUT frames are saved (the exact chamber JPEG the model flagged),
+// keyed by event id and served at GET /defect/frames/input/:eventId. Under the
+// repo (bind-mounted into the container) so it survives restarts. These pair
+// with the event's maps_png overlay to reconstruct the state the model flagged.
+const DEFECT_FRAMES_DIR =
+  process.env.DEFECT_FRAMES_DIR ?? join(process.cwd(), "..", "..", "data", "defect-frames");
 const SAMPLE_MS = 2000; // chamber/galvo grab cadence while printing
 const MAX_FRAMES = 16; // per-layer buffer cap; decimate to keep even spread
 const INFER_TIMEOUT_MS = 60_000;
@@ -245,6 +253,22 @@ async function runInference(chamber: Buffer[], galvo: Buffer[], z2: number) {
   } catch (err) {
     lastError = `events insert failed: ${(err as Error).message}`;
     log(lastError);
+  }
+
+  // Save the model's INPUT frame for alerting events only (keyed by event id),
+  // so a conversation can show the exact state the model flagged (input + the
+  // maps_png overlay). Best-effort — never block or fail the notify path. The
+  // last buffered chamber frame of the layer is the representative input view.
+  if (latest?.eventId != null && alerted.length > 0) {
+    const frame = chamber[chamber.length - 1] ?? chamber[0];
+    if (frame) {
+      try {
+        await mkdir(DEFECT_FRAMES_DIR, { recursive: true });
+        await writeFile(join(DEFECT_FRAMES_DIR, `${latest.eventId}.jpg`), frame);
+      } catch (err) {
+        log(`input frame save failed for event ${latest.eventId}: ${(err as Error).message}`);
+      }
+    }
   }
 }
 
@@ -593,6 +617,20 @@ const server = http.createServer((req, res) => {
       }
       if (req.method === "GET" && path === "/latest") {
         return send(200, latest);
+      }
+      // The saved input frame for an alerting event (image/jpeg). Pairs with the
+      // event's maps_png overlay to show the state the model flagged.
+      if (req.method === "GET" && /^\/frames\/input\/\d+$/.test(path)) {
+        const eventId = Number(path.split("/")[3]);
+        try {
+          const data = await readFile(join(DEFECT_FRAMES_DIR, `${eventId}.jpg`));
+          res.statusCode = 200;
+          res.setHeader("content-type", "image/jpeg");
+          res.setHeader("cache-control", "public, max-age=31536000, immutable");
+          return res.end(data);
+        } catch {
+          return send(404, { error: "input frame not found" });
+        }
       }
       return send(404, { error: "not found" });
     } catch (err) {

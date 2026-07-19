@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -7,11 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { X, PanelRight } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import type { JobDetail } from "@/hooks/useJobs";
 import { useJob } from "@/hooks/useJob";
+import { useActiveBuild } from "@/hooks/useActiveBuild";
 import { useJobInstances } from "@/hooks/useJobInstances";
 import { JobBuild3D, PartViewer3D } from "@/panels/JobPreview3D";
 import { JobPanel } from "@/panels/JobPanel";
@@ -25,29 +28,64 @@ import { ChamberThermalPane } from "@/pages/MissionControl";
 // via useSetArtifacts; ArtifactSplit (hoisted to the app shell) owns ordering,
 // auto-switch, open/close, resize, and the reopen "pull".
 
-// The discriminated artifact union. `job` = a stored-job 3D preview (read-only);
-// `chamber` = the live Mission Control feed (surfaced while a print runs).
-// Profiles, reference docs etc. slot in as new kinds later.
-export type Artifact = { kind: "job"; jobId: string } | { kind: "chamber" };
+// The discriminated artifact union. `job` = a stored-job 3D preview; `build` =
+// a recorded print (links to its page); `profile` = a print profile's key
+// fields; `chamber` = the live Mission Control feed (surfaced while a print
+// runs). job/build/profile are pinned by the agent via the artifact_* MCP
+// tools; chamber is added by the page while printing. The `type:id` key format
+// is shared with the ?artifact= URL param and the MCP AGENTIC_FOCUS token.
+export type Artifact =
+  | { kind: "job"; jobId: string }
+  | { kind: "build"; buildId: string }
+  | { kind: "profile"; profileId: string }
+  | { kind: "chamber" };
 
-// Stable identity — the tab value and the key used for ordering / auto-switch.
+// Stable identity — the tab value, the ?artifact= URL token, and the key used
+// for ordering / auto-switch. Must round-trip through artifactFromKey.
 export function artifactKey(a: Artifact): string {
   switch (a.kind) {
     case "job":
       return `job:${a.jobId}`;
+    case "build":
+      return `build:${a.buildId}`;
+    case "profile":
+      return `profile:${a.profileId}`;
     case "chamber":
       return "chamber";
   }
 }
 
-// Tab label. Jobs are disambiguated by a short id (the full name isn't known
-// until the tab's body fetches it).
+// Parse a "type:id" token (URL param / MCP focus) back into an Artifact.
+// Null for unknown tokens so a stale URL param is simply ignored.
+export function artifactFromKey(key: string): Artifact | null {
+  if (key === "chamber") return { kind: "chamber" };
+  const i = key.indexOf(":");
+  if (i < 0) return null;
+  const id = key.slice(i + 1);
+  switch (key.slice(0, i)) {
+    case "job":
+      return id ? { kind: "job", jobId: id } : null;
+    case "build":
+      return id ? { kind: "build", buildId: id } : null;
+    case "profile":
+      return id ? { kind: "profile", profileId: id } : null;
+    default:
+      return null;
+  }
+}
+
+// Tab label. Jobs/profiles are disambiguated by a short id (the full name isn't
+// known until the tab's body fetches it); builds show their numeric id.
 function tabLabel(a: Artifact): string {
   switch (a.kind) {
     case "chamber":
       return "Mission Control";
     case "job":
       return `Job · ${a.jobId.slice(0, 4)}`;
+    case "build":
+      return `Build ${a.buildId}`;
+    case "profile":
+      return `Profile · ${a.profileId.slice(0, 4)}`;
   }
 }
 
@@ -222,13 +260,138 @@ function ChamberArtifact() {
   );
 }
 
-// Body for one artifact. The job preview scrolls with padding; the chamber
-// feed fills edge-to-edge (it manages its own layout).
-function ArtifactBody({ artifact }: { artifact: Artifact }) {
-  if (artifact.kind === "chamber") return <ChamberArtifact />;
+// Recorded-build reference (a PAST build): a compact card that links to the
+// build's page. Deliberately light — the build's own tabbed shell (stats/
+// replay/triage) is the place to dig in; here we just confirm which is pinned.
+function BuildArtifact({ buildId }: { buildId: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="font-heading text-sm">Build {buildId}</div>
+      <Link
+        to={`/builds/${buildId}`}
+        className="inline-block w-fit border-2 border-border rounded-base bg-main text-main-foreground px-2 py-1 text-xs shadow-shadow hover:translate-x-0.5 hover:translate-y-0.5 transition-transform"
+      >
+        Open build page →
+      </Link>
+      <div className="text-[10px] font-mono opacity-50">
+        Pinned to this conversation. Stats, replay, and triage live on the build page.
+      </div>
+    </div>
+  );
+}
+
+// A build artifact is context-aware: while THIS build is the active print it is
+// live "build mission control" (chamber/thermal/defect stream + job status,
+// edge-to-edge); once the print ends it collapses to the static recorded
+// summary. This is the merge of the old standalone chamber tab into the build
+// artifact — monitoring is now deliberate (attach the build), not global.
+function BuildArtifactBody({ buildId }: { buildId: string }) {
+  const active = useActiveBuild();
+  if (active.printing && String(active.buildId) === buildId) {
+    return <ChamberArtifact />;
+  }
   return (
     <div className="h-full overflow-y-auto p-3">
-      <JobArtifact key={artifact.jobId} jobId={artifact.jobId} />
+      <BuildArtifact buildId={buildId} />
+    </div>
+  );
+}
+
+// Print-profile reference: name + the fields that drive an experiment. Read
+// from the same /api/profiles/:id endpoint the Print Profiles page uses
+// (?merged=true resolves nulls that inherit from the system Default).
+const PROFILE_FIELDS: [key: string, label: string, unit?: string][] = [
+  ["material", "Material"],
+  ["layerThickness", "Layer thickness", "µm"],
+  ["recoaterPasses", "Recoater passes"],
+  ["heatingTargetPowder", "Powder target", "°C"],
+  ["heatingTargetPrint", "Print target", "°C"],
+  ["totalEnergyDensityPercent", "Total energy density", "%"],
+  ["laserFillEnergyDensity", "Fill energy density"],
+  ["outlineCount", "Outline count"],
+];
+
+function ProfileArtifact({ profileId }: { profileId: string }) {
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProfile(null);
+    setNotFound(false);
+    void (async () => {
+      try {
+        const r = await fetch(`/api/profiles/${encodeURIComponent(profileId)}?merged=true`);
+        if (cancelled) return;
+        if (!r.ok) return setNotFound(true);
+        setProfile((await r.json()) as Record<string, unknown>);
+      } catch {
+        if (!cancelled) setNotFound(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId]);
+
+  if (notFound) {
+    return (
+      <div className="text-xs opacity-60">
+        Profile <span className="font-mono">{profileId.slice(0, 8)}</span> is no longer on the printer.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <span className="font-heading text-sm truncate" title={String(profile?.name ?? "")}>
+          {profile ? String(profile.name ?? "(unnamed profile)") : "loading profile…"}
+        </span>
+        <span className="font-mono text-[10px] opacity-50">{profileId}</span>
+      </div>
+      <Link
+        to={`/profiles/${profileId}`}
+        className="inline-block w-fit border-2 border-border rounded-base bg-main text-main-foreground px-2 py-1 text-xs shadow-shadow hover:translate-x-0.5 hover:translate-y-0.5 transition-transform"
+      >
+        Edit on Print Profiles →
+      </Link>
+      {profile && (
+        <div className="border-2 border-border divide-y-2 divide-border text-xs">
+          {PROFILE_FIELDS.map(([key, label, unit]) => {
+            const v = profile[key];
+            return (
+              <div key={key} className="flex items-center gap-2 px-2 py-1.5">
+                <span className="flex-1 opacity-60">{label}</span>
+                <span className="font-mono">
+                  {v == null || v === "" ? "—" : `${v}${unit ? ` ${unit}` : ""}`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="text-[10px] font-mono opacity-40">
+        Profile names can lie — these are the JSON field values, not the name.
+      </div>
+    </div>
+  );
+}
+
+// Body for one artifact. The job/profile previews scroll with padding; the
+// chamber feed and a LIVE build fill edge-to-edge (they manage their own
+// layout); a past build shows a padded static summary (handled inside
+// BuildArtifactBody).
+function ArtifactBody({ artifact }: { artifact: Artifact }) {
+  if (artifact.kind === "chamber") return <ChamberArtifact />;
+  if (artifact.kind === "build") return <BuildArtifactBody key={artifact.buildId} buildId={artifact.buildId} />;
+  return (
+    <div className="h-full overflow-y-auto p-3">
+      {artifact.kind === "job" ? (
+        <JobArtifact key={artifact.jobId} jobId={artifact.jobId} />
+      ) : (
+        <ProfileArtifact key={artifact.profileId} profileId={artifact.profileId} />
+      )}
     </div>
   );
 }
@@ -305,9 +468,27 @@ export function ArtifactSplit({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [order, setOrder] = useState<string[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
+  // The active tab lives in the URL (?artifact=type:id) so it's deep-linkable
+  // and — on the conversation page — readable as the "focus" sent with each
+  // message (no per-click DB write). Other params preserved; replace: true
+  // keeps tab-flipping out of the history stack.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeKey = searchParams.get("artifact");
+  const selectKey = useCallback(
+    (k: string) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("artifact", k);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
   const sig = artifacts.map(artifactKey).join("");
 
   useEffect(() => {
@@ -323,11 +504,11 @@ export function ArtifactSplit({
     const fresh = keys.filter((k) => !seenRef.current.has(k));
     fresh.forEach((k) => seenRef.current.add(k));
     if (fresh.length > 0) {
-      setActiveKey(fresh[fresh.length - 1]!);
+      selectKey(fresh[fresh.length - 1]!);
       setOpen(true);
-    } else {
-      // keep the active tab unless it vanished, then fall back to the newest
-      setActiveKey((cur) => (cur && keys.includes(cur) ? cur : keys[keys.length - 1] ?? null));
+    } else if ((!activeKey || !keys.includes(activeKey)) && keys.length > 0) {
+      // active tab vanished (or none set) → fall back to the newest
+      selectKey(keys[keys.length - 1]!);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
@@ -382,7 +563,7 @@ export function ArtifactSplit({
             <ArtifactTabs
               artifacts={ordered}
               activeKey={activeKey}
-              onSelect={setActiveKey}
+              onSelect={selectKey}
               onClose={() => setOpen(false)}
             />
           </ResizablePanel>
