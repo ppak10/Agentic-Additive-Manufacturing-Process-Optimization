@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,13 +7,14 @@ import { Slider } from "@/components/ui/slider";
 import { DEFECT_COLORS } from "@/lib/defects";
 import { cn } from "@/lib/utils";
 
-// Labeling triage queue: sls-analyze-build flags suspicious powder regions
-// (CV suspicion sort — diff vs previous layer + chroma, parts masked out
-// via the homography); this page streams the flagged frames to the human
-// for rapid adjudication. Throughput is the design goal — Space dismisses
-// a clean frame and advances; labeling a real anomaly is click-box →
-// class → save. Labels land in defect_labels (source 'triage'), candidates
-// get back-linked, and sls-export-labels ships everything per build.
+// Per-build triage queue (reached via /builds/:buildId/triage): sls-analyze-build
+// flags suspicious powder regions (CV suspicion sort — diff vs previous layer +
+// chroma, parts masked out via the homography); this page streams the flagged
+// frames FOR ONE BUILD to the human for rapid adjudication. Throughput is the
+// design goal — Space dismisses a clean frame and advances; labeling a real
+// anomaly is click-box → class → save. Labels land in defect_labels
+// (source 'triage'), candidates get back-linked, and sls-export-labels ships
+// everything per build.
 
 const CLASSES = Object.keys(DEFECT_COLORS);
 
@@ -37,6 +38,7 @@ interface QueueFrame {
 }
 
 export function Labeling() {
+  const { buildId } = useParams<{ buildId: string }>();
   const [queue, setQueue] = useState<QueueFrame[] | null>(null);
   const [qIdx, setQIdx] = useState(0);
   const [done, setDone] = useState(0);
@@ -66,8 +68,9 @@ export function Labeling() {
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!buildId) return;
     try {
-      const r = await fetch("/defect/anomalies?status=pending");
+      const r = await fetch(`/defect/anomalies?status=pending&build_id=${buildId}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const rows = (await r.json()) as (Candidate & { frame_id: number | string })[];
       const byFrame = new Map<number, QueueFrame>();
@@ -95,7 +98,7 @@ export function Labeling() {
     } catch (e) {
       setErr(String((e as Error).message ?? e));
     }
-  }, []);
+  }, [buildId]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -236,7 +239,7 @@ export function Labeling() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
-            <span>Labeling queue</span>
+            <span>Triage queue · build {buildId}</span>
             {queue && (
               <Badge variant="neutral">
                 {queue.length} flagged frame{queue.length === 1 ? "" : "s"} · {done} done
@@ -250,8 +253,8 @@ export function Labeling() {
             <div className="text-xs opacity-60">Loading queue…</div>
           ) : queue.length === 0 ? (
             <div className="text-xs opacity-60">
-              Queue empty — run <code>uv run sls-analyze-build --build N</code> after a build to
-              flag candidates, or take a bow: everything's adjudicated.
+              Queue empty — run <code>uv run sls-analyze-build --build {buildId}</code> to
+              flag candidates for this build, or take a bow: everything's adjudicated.
             </div>
           ) : current ? (
             <>
@@ -373,7 +376,6 @@ export function Labeling() {
                 <thead className="sticky top-0 bg-secondary-background">
                   <tr className="text-left border-b-2 border-border">
                     <th className="px-2 py-1">#</th>
-                    <th className="px-2 py-1">build</th>
                     <th className="px-2 py-1">layer</th>
                     <th className="px-2 py-1">regions</th>
                     <th className="px-2 py-1">max score</th>
@@ -392,7 +394,6 @@ export function Labeling() {
                       )}
                     >
                       <td className="px-2 py-1">{i + 1}</td>
-                      <td className="px-2 py-1">{f.buildId}</td>
                       <td className="px-2 py-1">{f.layer ?? "—"}</td>
                       <td className="px-2 py-1">{f.candidates.length}</td>
                       <td className="px-2 py-1">

@@ -5,6 +5,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { InovaClient } from "./client.js";
 import { registerPrinterStatus } from "./printer/status.js";
+import { registerPrintingObjects } from "./printer/objects.js";
+import { registerPrinterJobs } from "./printer/jobs.js";
+import { registerPrinterProfiles } from "./printer/profiles.js";
 import { registerRecoaterPasses } from "./recoater/passes.js";
 import { registerRecoaterFullPasses } from "./recoater/full.js";
 import { registerLayerOverrides } from "./recoater/overrides.js";
@@ -19,9 +22,12 @@ const client = new InovaClient();
 
 // Control tools — live printer, need INOVA_API_BASE_URL.
 registerPrinterStatus(server, client);
+registerPrintingObjects(server, client);
 registerRecoaterPasses(server, client);
 registerRecoaterFullPasses(server, client);
 registerLayerOverrides(server, client);
+registerPrinterJobs(server, client);
+registerPrinterProfiles(server, client);
 
 // Knowledge tools — recorder Postgres, need DATABASE_URL (read-only).
 registerDataBuilds(server);

@@ -128,8 +128,19 @@ LEFT JOIN LATERAL (
   SELECT * FROM inova_jobs j
   WHERE j.job_id = s.job_id
   ORDER BY abs(j.print_date - s.start_time::date) LIMIT 1
-) j ON true;
+) j ON true
+-- builds folded into another by sls-merge-builds are hidden (their rows
+-- survive as tombstones so references still resolve; see merge_builds.py)
+WHERE b.merged_into IS NULL;
 """
+
+# merged_into: tombstone pointer written by sls-merge-builds when a build is
+# folded into its canonical sibling (recorder restart split one PrintSession
+# across two build ids). The column must exist before the view references it.
+BUILDS_MERGED_INTO_DDL = (
+    "ALTER TABLE builds ADD COLUMN IF NOT EXISTS "
+    "merged_into bigint REFERENCES builds(id)"
+)
 
 METRIC_COLS = ["modulus_pa", "peak_load_n", "peak_stress_pa", "strain_at_peak",
                "load_at_break_n", "stress_at_break_pa", "strain_at_break",
@@ -254,6 +265,7 @@ def main() -> int:
         print(f"inova_print_sessions: "
               f"{sync_sessions(conn, args.database_repo)} rows")
         print(f"astm_specimens: {sync_specimens(conn, args.astm_repo)} rows")
+        conn.execute(BUILDS_MERGED_INTO_DDL)  # ensure column before the view uses it
         conn.execute(REGISTRY_VIEW)
         print("build_registry view refreshed")
         conn.commit()

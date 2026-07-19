@@ -1,6 +1,7 @@
 // Stdio round-trip smoke test: spawn the server, list tools, exercise the
-// read-only tools against the live Inova API. Never calls a set-tool — this
-// is safe to run mid-print.
+// read-only tools against the live Inova API. Set-tools are only invoked in
+// ways designed to be REJECTED by their guards (and chosen so that even a
+// broken guard could not mutate anything) — safe to run mid-print.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import path from "node:path";
@@ -16,6 +17,13 @@ const EXPECTED_TOOLS = [
   "recoater_full_passes_set",
   "layer_overrides_get",
   "layer_overrides_set",
+  "job_list",
+  "job_get",
+  "job_set",
+  "job_create_from_template",
+  "profile_list",
+  "profile_get",
+  "profile_set",
   "builds_list",
   "build_get",
   "astm_query",
@@ -30,6 +38,8 @@ const READ_ONLY_TOOLS = [
   "recoater_passes_get",
   "recoater_full_passes_get",
   "layer_overrides_get",
+  "job_list",
+  "profile_list",
 ];
 
 // Knowledge tools hit the recorder Postgres (DATABASE_URL), not the printer
@@ -100,6 +110,142 @@ for (const [name, args] of DATA_GUARDS) {
   } else {
     console.error(`FAIL ${name} guard did not reject: ${JSON.stringify(args)}`);
     failures += 1;
+  }
+}
+
+// Jobs tools — dynamic on the live job list. Guard calls are chosen so a
+// BROKEN guard still cannot mutate: the "[TEMPLATE]"-name guard uses a
+// nonexistent job id (would 404 before patching), the template-read-only
+// guard re-sends the template's current profile id (idempotent), and the
+// non-template clone uses a nonexistent profile id (profile validation
+// would reject before cloning).
+function firstText(res: { content?: unknown }): string {
+  return ((res.content as Array<{ text?: string }>)?.[0]?.text ?? "");
+}
+
+const jobListRes = await client.callTool({ name: "job_list", arguments: {} });
+const jobList = jobListRes.isError
+  ? []
+  : (JSON.parse(firstText(jobListRes)) as Array<{
+      id: string;
+      name: string;
+      is_template: boolean;
+    }>);
+
+if (jobList.length === 0) {
+  console.log("skip jobs detail/guards (no stored jobs)");
+} else {
+  const detailRes = await client.callTool({
+    name: "job_get",
+    arguments: { job_id: jobList[0].id },
+  });
+  if (detailRes.isError) {
+    console.error(`FAIL job_get: ${firstText(detailRes)}`);
+    failures += 1;
+  } else {
+    console.log(`ok   job_get ${jobList[0].id}: ${firstText(detailRes).slice(0, 80).replace(/\s+/g, " ")}…`);
+  }
+
+  // name guard: nonexistent job, so even a broken guard just 404s
+  const nameGuard = await client.callTool({
+    name: "job_set",
+    arguments: {
+      job_id: "00000000-0000-0000-0000-000000000000",
+      name: "[TEMPLATE] smoke",
+    },
+  });
+  if (nameGuard.isError) console.log("ok   job_set rejected [TEMPLATE] name");
+  else {
+    console.error("FAIL job_set accepted a [TEMPLATE] name");
+    failures += 1;
+  }
+
+  const template = jobList.find((j) => j.is_template);
+  if (template) {
+    const detail = JSON.parse(
+      firstText(await client.callTool({ name: "job_get", arguments: { job_id: template.id } })),
+    ) as { printProfileId: string | null };
+    const tmplGuard = await client.callTool({
+      name: "job_set",
+      arguments: {
+        job_id: template.id,
+        print_profile_id: detail.printProfileId ?? "",
+      },
+    });
+    if (tmplGuard.isError) console.log("ok   job_set rejected template mutation");
+    else {
+      console.error("FAIL job_set mutated a template");
+      failures += 1;
+    }
+  } else {
+    console.log("skip template-read-only guard (no [TEMPLATE] job stored)");
+  }
+
+  // Profile guardrails — same safety construction: the bounds guard uses a
+  // nonexistent id (a broken guard would just 404), the Default guard
+  // re-sends the Default's current name (idempotent if broken).
+  const profListRes = await client.callTool({ name: "profile_list", arguments: {} });
+  const profList = profListRes.isError
+    ? []
+    : (JSON.parse(firstText(profListRes)) as Array<{ id: string; name: string; isDefault: boolean }>);
+  const dfltProf = profList.find((p) => p.isDefault);
+
+  if (profList.length > 0) {
+    const pg = await client.callTool({
+      name: "profile_get",
+      arguments: { profile_id: profList[0].id, merged: true },
+    });
+    if (pg.isError) {
+      console.error(`FAIL profile_get: ${firstText(pg)}`);
+      failures += 1;
+    } else {
+      console.log(`ok   profile_get ${profList[0].name}: ${firstText(pg).slice(0, 80).replace(/\s+/g, " ")}…`);
+    }
+
+    const bounds = await client.callTool({
+      name: "profile_set",
+      arguments: {
+        profile_id: "00000000-0000-0000-0000-000000000000",
+        fields: { surfaceTarget: 500 },
+      },
+    });
+    if (bounds.isError) console.log("ok   profile_set rejected out-of-range surfaceTarget=500");
+    else {
+      console.error("FAIL profile_set accepted surfaceTarget=500");
+      failures += 1;
+    }
+
+    if (dfltProf) {
+      const dg = await client.callTool({
+        name: "profile_set",
+        arguments: { profile_id: dfltProf.id, name: dfltProf.name },
+      });
+      if (dg.isError) console.log("ok   profile_set rejected the system Default");
+      else {
+        console.error("FAIL profile_set mutated the system Default");
+        failures += 1;
+      }
+    }
+  } else {
+    console.log("skip profile guards (no profiles listed)");
+  }
+
+  const nonTemplate = jobList.find((j) => !j.is_template);
+  if (nonTemplate) {
+    const cloneGuard = await client.callTool({
+      name: "job_create_from_template",
+      arguments: {
+        template_job_id: nonTemplate.id,
+        print_profile_id: "00000000-0000-0000-0000-000000000000",
+      },
+    });
+    if (cloneGuard.isError) console.log("ok   job_create_from_template rejected non-template source");
+    else {
+      console.error("FAIL job_create_from_template cloned a non-template");
+      failures += 1;
+    }
+  } else {
+    console.log("skip non-template clone guard (all stored jobs are templates)");
   }
 }
 

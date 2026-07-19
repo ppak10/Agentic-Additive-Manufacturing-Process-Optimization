@@ -75,8 +75,12 @@ def main() -> int:
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM agent_conversations ORDER BY id")
+            # debug = dev/test conversations, flagged in the GUI — kept out
+            # of the published dataset (and any learning-loop consumer)
+            cur.execute("SELECT * FROM agent_conversations WHERE NOT debug ORDER BY id")
             convs = _rows(cur)
+            cur.execute("SELECT count(*) FROM agent_conversations WHERE debug")
+            n_debug = cur.fetchone()[0]
             cur.execute(
                 "SELECT conversation_id, turns AS turn, started_at, ended_at,"
                 " tool_calls, tokens_in, tokens_out, exit_code"
@@ -117,7 +121,8 @@ def main() -> int:
             n += 1
 
     print(f"conversations.jsonl: {n} conversations"
-          + (f" ({leaks} EXCLUDED for credential leaks)" if leaks else ""))
+          + (f" ({leaks} EXCLUDED for credential leaks)" if leaks else "")
+          + (f" ({n_debug} debug conversations skipped)" if n_debug else ""))
     return 1 if leaks else 0
 
 

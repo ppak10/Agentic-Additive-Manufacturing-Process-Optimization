@@ -10,10 +10,15 @@ error with instructions if unset).
 
 | Tool | Effect |
 |---|---|
-| `printer_status` | Read-only: layer progress, temperatures, power, positions, recoater override state. |
+| `printer_status` | Read-only: is_printing, current job (name/profile/phase/progress), recording build id, layer progress, temperatures, power, positions, recoater override state. |
 | `recoater_passes_get` / `recoater_passes_set` | Staged powder delivery WITHIN one layer (1/N per pass + finishing pass). |
 | `recoater_full_passes_get` / `recoater_full_passes_set` | Expand each layer into N full recoat cycles (optionally dry). |
 | `layer_overrides_get` / `layer_overrides_set` | Runtime knob registry: recoater speeds, shake, powder dosing, Z clearance, delays. |
+| `job_list` / `job_get` | Stored jobs on the printer (queued layouts, not print history): metadata, print profile, nesting instances. Works while idle. |
+| `job_set` | Rename a stored job / change its print profile. Metadata-only, inert. Refuses `[TEMPLATE]` jobs. |
+| `job_create_from_template` | Clone an operator-blessed `[TEMPLATE]` job with a different print profile — the way to prepare a profile experiment. The clone is NOT started. |
+| `profile_list` / `profile_get` | Live print profiles: list (with modifiedAt) and per-profile fields. `merged=true` = effective values — adapt from those; profile NAMES lie. |
+| `profile_set` | Upsert: create a profile (optionally from a base profile's settings) or partially update one. Field bounds enforced (schema + plugin); the system Default profile is refused. Inert until a job using it is printed. |
 
 ## Knowledge tools (recorder database, read-only)
 
@@ -51,3 +56,12 @@ builds, `build_get` to drill into one.
   full-recoat override is a no-op; report that instead of assuming success.
 - TimeSpan knobs are fractional seconds; factor knobs multiply the profile
   value (1.0 = neutral); temperatures are °C.
+- Jobs whose name contains `[TEMPLATE]` are operator-curated test layouts:
+  read-only to you. Instantiate them with `job_create_from_template`; never
+  rename a job to add or remove the marker. Creating a job never starts a
+  print — the operator reviews and starts it.
+- Print profiles: the system Default is read-only (every profile inherits
+  from it). Adapt from `profile_get merged=true` values, never from what a
+  profile's name claims. Field bounds in the `profile_set` schema are hard
+  printer-safety limits, not suggestions — if a value you want is outside
+  them, say so instead of clamping silently.

@@ -35,7 +35,7 @@ export interface OneShotResult {
 
 export interface PanelDeps {
   pool: pg.Pool | null;
-  // Fresh analyst one-shot on the given harness; must enforce its own timeout.
+  // Fresh one-shot on the given harness; must enforce its own timeout.
   runOneShot: (harness: Harness, message: string) => Promise<OneShotResult>;
 }
 
@@ -198,7 +198,6 @@ async function fanOut(
             conversationId = await createConversation(deps.pool, {
               harness,
               role: "panel:candidate",
-              preset: "analyst",
               transcriptDir: dirName,
             });
             await deps.pool.query(
@@ -284,7 +283,6 @@ async function createPanel(deps: PanelDeps, opts: { console?: boolean; enabled?:
     p.conversationId = await createConversation(deps.pool, {
       harness: "panel",
       role: "panel",
-      preset: "analyst",
       context: { console: p.console, enabled: p.enabled },
     }).catch(() => null as unknown as number);
   }

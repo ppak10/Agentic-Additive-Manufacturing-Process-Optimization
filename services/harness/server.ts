@@ -11,11 +11,10 @@
 // exactly like a headless run: transcript under data/sessions/ + a row in
 // agent_sessions (role 'chat') — GUI chats are thesis data too.
 //
-// Presets: 'analyst' (default) restricts Claude to read-only tools via
-// --allowedTools; codex/opencode/agy have all-or-nothing permission flags,
-// so for them analyst is enforced by prompt instruction only (documented
-// limitation). 'operator' grants the full tool surface — the GUI gates it
-// behind an explicit confirmation.
+// Every chat gets the full MCP tool surface (the knowledge tools are
+// read-only by construction and *_set calls are logged to agent_actions
+// server-side). The analyst/operator preset split was removed 2026-07-18 —
+// reintroduce deliberately if tool gating is ever needed again.
 //
 // Usage: npx tsx harness/server.ts   (PORT via AGENT_BROKER_PORT, default 3100)
 import Fastify from "fastify";
@@ -81,12 +80,10 @@ CREATE INDEX IF NOT EXISTS agent_sessions_started_idx
 `;
 
 type Harness = "claude" | "opencode" | "codex" | "agy";
-type Preset = "analyst" | "operator";
 
 interface Chat {
   id: string;
   harness: Harness;
-  preset: Preset;
   cliSessionId: string | null;
   conversationId: number | null;
   dir: string;
@@ -95,24 +92,6 @@ interface Chat {
 }
 
 const chats = new Map<string, Chat>();
-
-const READ_TOOLS = [
-  "printer_status",
-  "recoater_passes_get",
-  "recoater_full_passes_get",
-  "layer_overrides_get",
-  "builds_list",
-  "build_get",
-  "astm_query",
-  "telemetry_summary",
-  "db_query",
-  "reference_list",
-  "reference_get",
-].map((t) => `mcp__agentic-sls__${t}`);
-
-const ANALYST_NOTE =
-  "(Session preset: ANALYST — you may use read/query tools but must NOT " +
-  "call any *_set tool or modify printer state.)";
 
 // SSE event sent to the browser — same shape the store persists.
 type Ev = AgentEvent;
@@ -125,8 +104,6 @@ function buildCmd(chat: Chat, message: string): string[] {
   const resume = chat.cliSessionId;
   switch (chat.harness) {
     case "claude": {
-      const tools =
-        chat.preset === "operator" ? "mcp__agentic-sls" : READ_TOOLS.join(",");
       return [
         "claude",
         "-p",
@@ -139,13 +116,7 @@ function buildCmd(chat: Chat, message: string): string[] {
         ".mcp.json",
         "--strict-mcp-config",
         "--allowedTools",
-        tools,
-        // allowedTools ADDS to Claude's built-ins; analyst must also deny
-        // the ones that could reach the printer or filesystem sideways
-        // (Bash can curl the plugin API directly).
-        ...(chat.preset === "analyst"
-          ? ["--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch"]
-          : []),
+        "mcp__agentic-sls",
       ];
     }
     case "codex": {
@@ -153,7 +124,7 @@ function buildCmd(chat: Chat, message: string): string[] {
         ? ["codex", "exec", "resume", resume, message]
         : ["codex", "exec", message];
       // MCP calls are auto-cancelled in exec mode without the bypass
-      // (openai/codex#16685) — all-or-nothing, so analyst is prompt-level.
+      // (openai/codex#16685).
       return [...base, "--json", "--dangerously-bypass-approvals-and-sandbox"];
     }
     case "opencode":
@@ -190,7 +161,15 @@ function runTurn(
   const cmd = buildCmd(chat, message);
   const child = spawn(cmd[0], cmd.slice(1), {
     cwd: PLUGINS_ROOT,
-    env: process.env,
+    // Scope the MCP approval gate to this conversation (read by
+    // services/plugins/mcp approvals.ts). Absent for conversation-less chats,
+    // so their mutating tools run ungated as before.
+    env: {
+      ...process.env,
+      ...(chat.conversationId != null
+        ? { AGENTIC_CONVERSATION_ID: String(chat.conversationId) }
+        : {}),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   // Panel candidates run four CLIs in parallel — a hung one must not wedge
@@ -272,7 +251,7 @@ async function recordTurn(
       new Date(),
       chat.harness,
       r.res.model,
-      `chat:${chat.preset}`,
+      "chat",
       null,
       message.slice(0, 4000),
       path.join(path.basename(chat.dir), `turn-${chat.turn}`),
@@ -349,10 +328,10 @@ app.get("/agent/harness/status", async () => {
   }));
 });
 
-app.post<{ Body: { harness: Harness; preset?: Preset } }>(
+app.post<{ Body: { harness: Harness; debug?: boolean } }>(
   "/agent/chats",
   async (req, reply) => {
-    const { harness, preset } = req.body ?? ({} as any);
+    const { harness, debug } = req.body ?? ({} as any);
     if (!["claude", "opencode", "codex", "agy"].includes(harness)) {
       return reply.code(400).send({ error: "unknown harness" });
     }
@@ -361,7 +340,6 @@ app.post<{ Body: { harness: Harness; preset?: Preset } }>(
     const chat: Chat = {
       id,
       harness,
-      preset: preset === "operator" ? "operator" : "analyst",
       cliSessionId: null,
       conversationId: null,
       dir: path.join(sessionsRoot(), `${stamp}-chat-${harness}`),
@@ -374,75 +352,139 @@ app.post<{ Body: { harness: Harness; preset?: Preset } }>(
       chat.conversationId = await createConversation(pool, {
         harness: chat.harness,
         role: "chat",
-        preset: chat.preset,
         transcriptDir: path.basename(chat.dir),
+        debug: debug === true,
       });
     }
     chats.set(id, chat);
-    return { chatId: id, harness: chat.harness, preset: chat.preset };
+    return {
+      chatId: id,
+      conversationId: chat.conversationId,
+      harness: chat.harness,
+    };
   },
 );
+
+// One chat turn streamed as SSE — shared by the chatId- and
+// conversationId-keyed routes.
+async function streamChatTurn(
+  chat: Chat,
+  body: { message?: string; context?: string } | undefined,
+  reply: import("fastify").FastifyReply,
+) {
+  if (chat.busy) return reply.code(409).send({ error: "turn in progress" });
+  const { message, context } = body ?? {};
+  if (!message?.trim()) return reply.code(400).send({ error: "empty message" });
+
+  chat.busy = true;
+  chat.turn += 1;
+  const startedAt = new Date();
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  const events: Ev[] = [];
+  const emit = (ev: Ev) => {
+    reply.raw.write(`data: ${JSON.stringify(ev)}\n\n`);
+    if (ev.type !== "done") events.push(ev);
+  };
+
+  const parts = [];
+  if (context) parts.push(`[context] ${context}`);
+  parts.push(message);
+  const fullMessage = parts.join("\n\n");
+
+  try {
+    const r = await runTurn(chat, fullMessage, emit);
+    chat.cliSessionId = r.res.cliSessionId;
+    await recordTurn(chat, message, startedAt, r).catch((err) =>
+      console.error("recordTurn failed:", err?.message),
+    );
+    if (pool && chat.conversationId != null) {
+      await insertTurnMessages(
+        pool, chat.conversationId, chat.turn, message, context, events,
+      ).catch((err) => console.error("insertTurnMessages failed:", err?.message));
+      await finalizeConversation(pool, chat.conversationId, {
+        model: r.res.model,
+        cliSessionId: r.res.cliSessionId,
+      }).catch(() => {});
+    }
+    emit({
+      type: "done",
+      exitCode: r.res.exitCode,
+      toolCalls: r.res.toolCalls,
+      tokensIn: r.res.tokensIn,
+      tokensOut: r.res.tokensOut,
+      turn: chat.turn,
+    });
+  } catch (err) {
+    emit({ type: "error", message: String((err as Error)?.message ?? err) });
+  } finally {
+    chat.busy = false;
+    reply.raw.end();
+  }
+  return reply;
+}
 
 app.post<{ Params: { id: string }; Body: { message: string; context?: string } }>(
   "/agent/chats/:id/messages",
   async (req, reply) => {
     const chat = chats.get(req.params.id);
     if (!chat) return reply.code(404).send({ error: "unknown chat" });
-    if (chat.busy) return reply.code(409).send({ error: "turn in progress" });
-    const { message, context } = req.body ?? ({} as any);
-    if (!message?.trim()) return reply.code(400).send({ error: "empty message" });
+    return streamChatTurn(chat, req.body, reply);
+  },
+);
 
-    chat.busy = true;
-    chat.turn += 1;
-    const startedAt = new Date();
+// Conversation-keyed messaging — what the GUI's interactive conversation
+// page uses. Chats live in memory; if the broker restarted since the chat
+// was created, rehydrate one from the conversation row (harness,
+// cli_session_id, transcript dir, turn counter) and resume the CLI's
+// native session. agy caveat: continuation is `-c` (most recent), so a
+// rehydrated agy chat can cross-talk with a newer one — known v1 limit.
+async function chatForConversation(convId: number): Promise<Chat | "gone" | null> {
+  for (const c of chats.values()) if (c.conversationId === convId) return c;
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT harness, cli_session_id, transcript_dir
+     FROM agent_conversations WHERE id = $1 AND role = 'chat'`,
+    [convId],
+  );
+  if (!rows[0]) return "gone";
+  const { rows: t } = await pool.query(
+    `SELECT coalesce(max(turn), 0) AS turn FROM agent_messages WHERE conversation_id = $1`,
+    [convId],
+  );
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const chat: Chat = {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    harness: rows[0].harness as Harness,
+    cliSessionId: rows[0].cli_session_id ?? null,
+    conversationId: convId,
+    dir: path.join(
+      sessionsRoot(),
+      rows[0].transcript_dir ?? `${stamp}-chat-${rows[0].harness}`,
+    ),
+    turn: Number(t[0].turn),
+    busy: false,
+  };
+  mkdirSync(chat.dir, { recursive: true });
+  chats.set(chat.id, chat);
+  return chat;
+}
 
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    const events: Ev[] = [];
-    const emit = (ev: Ev) => {
-      reply.raw.write(`data: ${JSON.stringify(ev)}\n\n`);
-      if (ev.type !== "done") events.push(ev);
-    };
-
-    const parts = [];
-    if (context) parts.push(`[context] ${context}`);
-    if (chat.preset === "analyst") parts.push(ANALYST_NOTE);
-    parts.push(message);
-    const fullMessage = parts.join("\n\n");
-
-    try {
-      const r = await runTurn(chat, fullMessage, emit);
-      chat.cliSessionId = r.res.cliSessionId;
-      await recordTurn(chat, message, startedAt, r).catch((err) =>
-        console.error("recordTurn failed:", err?.message),
-      );
-      if (pool && chat.conversationId != null) {
-        await insertTurnMessages(
-          pool, chat.conversationId, chat.turn, message, context, events,
-        ).catch((err) => console.error("insertTurnMessages failed:", err?.message));
-        await finalizeConversation(pool, chat.conversationId, {
-          model: r.res.model,
-          cliSessionId: r.res.cliSessionId,
-        }).catch(() => {});
-      }
-      emit({
-        type: "done",
-        exitCode: r.res.exitCode,
-        toolCalls: r.res.toolCalls,
-        tokensIn: r.res.tokensIn,
-        tokensOut: r.res.tokensOut,
-        turn: chat.turn,
-      });
-    } catch (err) {
-      emit({ type: "error", message: String((err as Error)?.message ?? err) });
-    } finally {
-      chat.busy = false;
-      reply.raw.end();
+app.post<{ Params: { id: string }; Body: { message: string; context?: string } }>(
+  "/agent/conversations/:id/messages",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const convId = Number(req.params.id);
+    if (!Number.isFinite(convId)) return reply.code(400).send({ error: "bad id" });
+    const chat = await chatForConversation(convId);
+    if (chat === "gone" || chat === null) {
+      return reply.code(404).send({ error: `no chat conversation ${convId}` });
     }
-    return reply;
+    return streamChatTurn(chat, req.body, reply);
   },
 );
 
@@ -454,7 +496,7 @@ app.get<{ Querystring: { limit?: string } }>("/agent/conversations", async (req,
   const limit = Math.min(50, Number(req.query.limit) || 20);
   try {
     const { rows } = await pool.query(
-      `SELECT c.id, c.created_at, c.harness, c.role, c.model,
+      `SELECT c.id, c.created_at, c.harness, c.role, c.model, c.debug,
               (SELECT left(m.content, 80) FROM agent_messages m
                WHERE m.conversation_id = c.id AND m.kind IN ('user', 'event')
                  AND m.content IS NOT NULL
@@ -479,12 +521,13 @@ app.get<{ Params: { id: string } }>("/agent/conversations/:id", async (req, repl
   if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
   const id = Number(req.params.id);
   const { rows } = await pool.query(
-    `SELECT id, created_at, harness, role, model, preset, build_id FROM agent_conversations WHERE id = $1`,
+    `SELECT id, created_at, harness, role, model, build_id, debug
+     FROM agent_conversations WHERE id = $1`,
     [id],
   );
   if (!rows[0]) return reply.code(404).send({ error: `no conversation ${id}` });
   const { rows: messages } = await pool.query(
-    `SELECT turn, seq, ts, kind, content, tool_name, is_error, meta
+    `SELECT turn, seq, ts, kind, content, tool_name, tool_input, is_error, meta
      FROM agent_messages WHERE conversation_id = $1
      ORDER BY turn, seq LIMIT 3000`,
     [id],
@@ -496,23 +539,151 @@ app.get<{ Params: { id: string } }>("/agent/conversations/:id", async (req, repl
   return { conversation: rows[0], messages, builds: builds.map((b) => Number(b.build_id)) };
 });
 
-// Session history — also serves the GUI's Agents page, so it needs no
-// recorder-side wiring at all.
-app.get("/agent/sessions", async (_req, reply) => {
-  if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
-  try {
+// Toggle the debug flag — debug conversations are excluded from the
+// Conversations dataset export (the learning loop). Flipping it also
+// covers a panel's candidates (parent_id) so the whole tree stays out.
+app.patch<{ Params: { id: string }; Body: { debug?: boolean } }>(
+  "/agent/conversations/:id",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    const debug = req.body?.debug;
+    if (typeof debug !== "boolean") {
+      return reply.code(400).send({ error: "body must set debug: boolean" });
+    }
     const { rows } = await pool.query(
-      `SELECT id, started_at, ended_at, harness, model, role, build_id,
-              tool_calls, turns, tokens_in, tokens_out, exit_code,
-              left(prompt, 200) AS prompt, left(result, 300) AS result
-       FROM agent_sessions ORDER BY id DESC LIMIT 200`,
+      `UPDATE agent_conversations SET debug = $2
+       WHERE id = $1 OR parent_id = $1 RETURNING id`,
+      [id, debug],
     );
-    return rows;
-  } catch (err) {
-    if ((err as { code?: string }).code === "42P01") return [];
-    throw err;
-  }
-});
+    if (!rows.some((r) => Number(r.id) === id)) {
+      return reply.code(404).send({ error: `no conversation ${id}` });
+    }
+    return { ok: true, debug, updated: rows.length };
+  },
+);
+
+// ── approval gate (human-in-the-loop for mutating MCP tools) ──
+// Mode (ask/auto/plan) is per-conversation; the MCP server reads it and files
+// pending rows in agent_approvals while it blocks. The GUI polls the list here,
+// decides, and switches modes. DDL mirrors services/plugins/mcp approvals.ts
+// (both idempotent — whichever runs first wins).
+const APPROVALS_DDL = `
+CREATE TABLE IF NOT EXISTS agent_conversation_settings (
+  conversation_id BIGINT PRIMARY KEY,
+  approval_mode   TEXT NOT NULL DEFAULT 'ask',
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS agent_approvals (
+  id              BIGSERIAL PRIMARY KEY,
+  conversation_id BIGINT NOT NULL,
+  tool            TEXT NOT NULL,
+  arguments       JSONB,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  reason          TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS agent_approvals_pending_idx
+  ON agent_approvals (conversation_id, status);
+`;
+let approvalsReady: Promise<void> | null = null;
+function ensureApprovals(): Promise<void> {
+  // callers guard on `pool` before invoking
+  return (approvalsReady ??= pool!.query(APPROVALS_DDL).then(() => undefined));
+}
+const APPROVAL_MODES = new Set(["ask", "auto", "plan"]);
+
+// Pending approvals + current mode for a conversation (the GUI polls this).
+app.get<{ Params: { id: string } }>(
+  "/agent/conversations/:id/approvals",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad id" });
+    await ensureApprovals();
+    const { rows: pending } = await pool.query(
+      `SELECT id, tool, arguments, created_at FROM agent_approvals
+       WHERE conversation_id = $1 AND status = 'pending' ORDER BY id`,
+      [id],
+    );
+    const { rows: s } = await pool.query(
+      "SELECT approval_mode FROM agent_conversation_settings WHERE conversation_id = $1",
+      [id],
+    );
+    return { mode: s[0]?.approval_mode ?? "ask", pending };
+  },
+);
+
+// Decide a pending approval (approve / decline, with an optional reason).
+app.post<{ Params: { id: string }; Body: { decision?: string; reason?: string } }>(
+  "/agent/approvals/:id",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    const decision = req.body?.decision;
+    if (decision !== "approved" && decision !== "declined") {
+      return reply.code(400).send({ error: "decision must be approved|declined" });
+    }
+    await ensureApprovals();
+    const { rows } = await pool.query(
+      `UPDATE agent_approvals SET status = $2, reason = $3, decided_at = now()
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [id, decision, req.body?.reason ?? null],
+    );
+    if (!rows[0]) return reply.code(409).send({ error: "already decided or unknown" });
+    return { ok: true, id, decision };
+  },
+);
+
+// Set the conversation's approval mode.
+app.post<{ Params: { id: string }; Body: { mode?: string } }>(
+  "/agent/conversations/:id/mode",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    const mode = req.body?.mode;
+    if (!mode || !APPROVAL_MODES.has(mode)) {
+      return reply.code(400).send({ error: "mode must be ask|auto|plan" });
+    }
+    await ensureApprovals();
+    await pool.query(
+      `INSERT INTO agent_conversation_settings (conversation_id, approval_mode, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (conversation_id)
+       DO UPDATE SET approval_mode = EXCLUDED.approval_mode, updated_at = now()`,
+      [id, mode],
+    );
+    return { ok: true, mode };
+  },
+);
+
+// Session history — also serves the GUI's Agents page, so it needs no
+// recorder-side wiring at all. Cursor-paged: `before` (exclusive id) walks
+// older rows for the GUI's infinite scroll; no `before` returns the head.
+app.get<{ Querystring: { limit?: string; before?: string } }>(
+  "/agent/sessions",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const before = Number(req.query.before) || null;
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, started_at, ended_at, harness, model, role, build_id,
+                tool_calls, turns, tokens_in, tokens_out, exit_code,
+                left(prompt, 200) AS prompt, left(result, 300) AS result
+         FROM agent_sessions
+         WHERE ($1::bigint IS NULL OR id < $1)
+         ORDER BY id DESC LIMIT $2`,
+        [before, limit],
+      );
+      return rows;
+    } catch (err) {
+      if ((err as { code?: string }).code === "42P01") return [];
+      throw err;
+    }
+  },
+);
 
 app.get<{ Params: { id: string } }>("/agent/sessions/:id", async (req, reply) => {
   if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
@@ -537,8 +708,9 @@ app.get<{ Params: { id: string } }>("/agent/sessions/:id", async (req, reply) =>
 });
 
 // ---------------------------------------------------------------------------
-// Panel mode: fresh analyst one-shots per candidate (no session resume —
-// the panel's canonical transcript IS the context), 4-minute kill timeout.
+// Panel mode: fresh one-shots per candidate (no session resume — the
+// panel's canonical transcript IS the context), 4-minute kill timeout.
+// Advisory-only behavior is enforced by the panel's ADVISOR_HEADER prompt.
 
 registerPanelRoutes(app, {
   pool,
@@ -546,7 +718,6 @@ registerPanelRoutes(app, {
     const synthetic: Chat = {
       id: "panel",
       harness,
-      preset: "analyst",
       cliSessionId: null,
       conversationId: null,
       dir: "",
@@ -554,8 +725,7 @@ registerPanelRoutes(app, {
       busy: false,
     };
     const events: Ev[] = [];
-    const full = `${ANALYST_NOTE}\n\n${message}`;
-    const r = await runTurn(synthetic, full, (ev) => {
+    const r = await runTurn(synthetic, message, (ev) => {
       if (ev.type !== "done") events.push(ev);
     }, 240_000);
     return { ...r, events };

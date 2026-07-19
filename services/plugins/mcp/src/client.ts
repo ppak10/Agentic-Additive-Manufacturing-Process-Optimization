@@ -25,10 +25,23 @@ export class InovaClient {
   ) {}
 
   async get<T>(path: string): Promise<Timed<T>> {
-    return this.request<T>(path, { method: "GET" });
+    return this.request<Timed<T>>(path, { method: "GET" });
   }
 
   async post<T>(path: string, body: unknown): Promise<Timed<T>> {
+    return this.request<Timed<T>>(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  // The /jobs and /profiles routes return bare JSON — no Timed envelope.
+  async getBare<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: "GET" });
+  }
+
+  async postBare<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -36,13 +49,29 @@ export class InovaClient {
     });
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<Timed<T>> {
+  async patchBare<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async putBare<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const text = await res.text();
     if (!res.ok) throw new InovaApiError(res.status, text, path);
-    return JSON.parse(text) as Timed<T>;
+    return JSON.parse(text) as T;
   }
 }

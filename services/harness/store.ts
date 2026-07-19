@@ -61,12 +61,15 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
   harness         TEXT NOT NULL,
   model           TEXT,
   role            TEXT NOT NULL,
-  preset          TEXT,
   build_id        BIGINT,
   cli_session_id  TEXT,
   context         JSONB,
   transcript_dir  TEXT
 );
+
+-- The analyst/operator preset concept was removed 2026-07-18 (every chat
+-- gets the full tool surface); drop the column on existing databases.
+ALTER TABLE agent_conversations DROP COLUMN IF EXISTS preset;
 
 CREATE TABLE IF NOT EXISTS agent_messages (
   id              BIGSERIAL PRIMARY KEY,
@@ -94,6 +97,12 @@ ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS conversation_id BIGINT;
 ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS parent_id BIGINT REFERENCES agent_conversations(id);
 ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS parent_turn INT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS meta JSONB;
+
+-- Dev/test flag (2026-07-18): debug conversations are excluded from the
+-- Conversations dataset export (and any future learning-loop consumer) —
+-- filter with WHERE NOT debug. Settable at creation (GUI draft page) or
+-- toggled later via PATCH /agent/conversations/:id.
+ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS debug BOOLEAN NOT NULL DEFAULT false;
 
 -- One conversation spans many builds (user decision 2026-07-16): the
 -- association is one-to-many via this join table, populated as builds
@@ -261,25 +270,25 @@ export async function createConversation(
   meta: {
     harness: string;
     role: string;
-    preset?: string | null;
     buildId?: number | null;
     context?: unknown;
     transcriptDir?: string | null;
     createdAt?: Date;
+    debug?: boolean;
   },
 ): Promise<number> {
   const { rows } = await pool.query(
     `INSERT INTO agent_conversations
-       (created_at, harness, role, preset, build_id, context, transcript_dir)
+       (created_at, harness, role, build_id, context, transcript_dir, debug)
      VALUES (coalesce($1, now()), $2, $3, $4, $5, $6, $7) RETURNING id`,
     [
       meta.createdAt ?? null,
       meta.harness,
       meta.role,
-      meta.preset ?? null,
       meta.buildId ?? null,
       meta.context ? JSON.stringify(meta.context) : null,
       meta.transcriptDir ?? null,
+      meta.debug ?? false,
     ],
   );
   return rows[0].id;

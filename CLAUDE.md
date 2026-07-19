@@ -14,19 +14,32 @@ plane / learning loop; the wiki also holds the topical reference pages).
   spawn with this as cwd, so each harness's native discovery — `.mcp.json`,
   `.claude-plugin/`, `.opencode/`, `gemini-extension.json`, `.agents/` —
   anchors here, not the dev repo). `mcp/` inside is the TypeScript MCP
-  server (npm `@ppak10/agentic-sls-mcp`): 7 printer-control + 7 knowledge
+  server (npm `@ppak10/agentic-sls-mcp`): 14 printer-control + 7 knowledge
   tools, identical for all four harnesses (Claude Code, OpenCode, Codex,
-  Antigravity `agy`). Ground rules: `services/plugins/AGENTS.md`.
+  Antigravity `agy`). Ground rules: `services/plugins/AGENTS.md`. Jobs +
+  profiles tools (2026-07-18): `[TEMPLATE]`-named jobs are operator-blessed
+  layouts — agents instantiate via job_create_from_template, never modify;
+  profile_set upserts profiles (system Default refused); printer_status
+  merges recorder job/phase/recording state (RECORDER_BASE_URL).
 - `services/harness/` — uniform headless driver (`run.ts`), chat broker
   (`server.ts`, :3100, SSE), conversation store (`store.ts`), backfill,
   panel mode (`panel.ts`: `/agent/panel*` — 4-harness blinded fan-out,
   `agent_selections` labels incl. `user_authored`, `conversation_builds`
   one-to-many span tracking, event watcher auto-fans-out alerting
-  defect_detection events to the console panel). GUI: Mission Control's
-  PanelConsole is the ONLY agent surface (right sidebar removed
-  2026-07-16); sonar ping + browser notification on alerts/candidates.
+  defect_detection events to the console panel). Two agent surfaces
+  (2026-07-18): Mission Control's PanelConsole (4-harness arena; sonar
+  ping + browser notification on alerts/candidates) and interactive
+  single-harness chats on `/conversations/:id` — messaging is keyed by
+  CONVERSATION id (`POST /agent/conversations/:id/messages`, SSE); the
+  broker rehydrates the in-memory chat from the conversation row after
+  restarts (cli_session_id resume). `agent_conversations.debug` flags
+  dev/test conversations — excluded from the Conversations dataset export
+  (everything pre-2026-07-18 is flagged); toggle via GUI badge or
+  `PATCH /agent/conversations/:id` (cascades to panel candidates).
 - `services/web/` — React/Vite dashboard (:5173, docker compose, vite dev
-  mode + HMR): Builds registry pages, Agents session browser, Mission
+  mode + HMR): Builds registry pages, conversation pages (sidebar recents
+  + interactive chat, `/conversations/new` draft; the Agents session
+  browser page was removed 2026-07-18), Mission
   Control (chamber card with thermal/defect/exclude-object overlays —
   click a part outline → confirm → exclude; PanelConsole agent chat; the
   old right-docked sidebar chat is REMOVED). UI = canonical neobrutalism
@@ -38,7 +51,9 @@ plane / learning loop; the wiki also holds the topical reference pages).
   `#breadcrumb-actions` slot in the breadcrumb row. Jobs page: selection
   is route-backed via ONE optional-param route `/jobs/:id?` (two routes
   would remount and lose sort/paging state); crumb label rides
-  `location.state.breadcrumb`; job card has a dual 3D build preview
+  `location.state.breadcrumb`; Print Profiles (`/profiles/:id?`) mirrors
+  the same architecture with a react-hook-form detail card (neobrutalism
+  Form registry component, data-driven field spec); job card has a dual 3D build preview
   (`panels/JobPreview3D.tsx` — whole nested build + selected part) fed by
   the plugin's stored-job endpoints `/api/jobs/:id/instances` +
   `/api/jobs/:id/meshes/:hash` (work while idle, unlike
@@ -63,7 +78,14 @@ plane / learning loop; the wiki also holds the topical reference pages).
 - `services/pipeline/` — Python data pipeline + its tests (own
   pyproject; root pyproject is a virtual uv-workspace stub. Console
   scripts, run from root:
-  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|deliver-frames|backfill-frames|restore-builds|export-labels|backfill-camera-bboxes>`).
+  `uv run sls-<export|export-conversations|sync-reference|summarize-builds|match-build-sessions|merge-builds|deliver-frames|backfill-frames|restore-builds|export-labels|backfill-camera-bboxes>`).
+  `sls-merge-builds --into W --from L [L2 …] [--apply]` folds recorder builds
+  that a restart split across one PrintSession into a canonical winner:
+  repoints every build-keyed child row L→W, extends W's window, and TOMBSTONES
+  each loser (`builds.merged_into = W`, row kept so refs still resolve; the
+  `build_registry` view hides merged rows). Dry-run by default; refuses builds
+  that don't share an `inova_session_id` unless `--force`. Re-run
+  `sls-summarize-builds --build W` after.
 - `datasets/Agentic-SLS-Knowledge/` — curated reference corpus served by
   `reference_*` tools (its `source/`). Published HF dataset; the submodule
   pin records which corpus version agents saw. MUST stay initialized
@@ -167,10 +189,11 @@ Logs: `docker logs -f agentic-sls-recorder`.
   (openai/codex#16685); agy reads MCP config ONLY from
   `~/.gemini/config/mcp_config.json`; opencode resolves the project root
   via git toplevel (root `.opencode/` shim registers the MCP server) and
-  MUST get an explicit `--model` (its free zen default errors upstream); analyst-preset chats deny Claude's
-  Bash/Edit/Write (built-ins aren't restricted by `--allowedTools`);
+  MUST get an explicit `--model` (its free zen default errors upstream);
   harness CLIs run with cwd=services/plugins/ (re-register Claude's
-  plugin marketplace from that path after moves).
+  plugin marketplace from that path after moves). (The analyst/operator
+  chat presets were removed 2026-07-18 — every chat gets the full MCP
+  tool surface; note `--allowedTools` doesn't restrict Claude's built-ins.)
 - Three.js chamber views (`BuildLayout3D`/`JobPreview3D`): firmware
   transforms are row-major V·M — transpose for THREE; stored-job
   `MeshPrintTransform` expects the mesh RECENTERED on its bounds
@@ -183,6 +206,25 @@ Logs: `docker logs -f agentic-sls-recorder`.
   are backwards).
 - Profile names can lie (a "20mJ/mm" profile contains 15) — read the JSON
   field, never the name.
+- Print-profile thickness fields are MICROMETERS (layerThickness 100,
+  bedPreparationThickness 13000) — the pre-2026-07-18 GUI mislabeled them
+  mm and could never edit them. Profile field bounds live in THREE places
+  that must stay in sync: plugin `PrintProfileEndpoints._bounds` (the
+  enforced chokepoint — the firmware model has NO validation of its own),
+  the MCP profile_set zod schema, and the GUI form field spec. Temps cap
+  at 200 °C by deliberate choice. A raw profile JSON carries a ~250 KB
+  `stats` blob — always project it away before returning to a model.
+- Firmware `CloneJob` keeps the raw requested name on the returned object
+  while sanitizing the filename ("/" → "_") — re-fetch via TryGetJob
+  before any follow-up UpsertJob or it throws FileNotFound.
+- `docker compose` commands MUST run from the repo root: service folders
+  have their own compose.yml, so running from services/<svc>/ resolves an
+  empty project and silently no-ops (the container keeps old code —
+  symptom: no "Container … Restarting" output).
+- Inova plugin deploys: build.sh → commit+push the plugin submodule →
+  ON THE PRINTER `cd ~/GitHub/Inova-API-Plugin && git pull && ./install.sh`
+  → restart firmware (user-run). Skipping pull or install.sh leaves the
+  old DLL running — verify by probing an endpoint, not by assumption.
 - One firmware PrintSession can span multiple recorder builds (restarts);
   the registry maps builds→sessions via `builds.inova_session_id`.
 - Destructive printer actions (reboot/kill/restart) are user-executed;

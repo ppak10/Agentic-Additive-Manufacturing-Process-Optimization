@@ -800,6 +800,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     pluginProxy("DELETE", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
   );
 
+  // Clone a stored job (plugin runs the firmware's CloneJob), optionally
+  // re-pointing the print profile. Body: { name, printProfileId? }.
+  app.post<{ Params: { id: string }; Body: { name?: string; printProfileId?: string } }>(
+    "/api/jobs/:id/clone",
+    (req, reply) =>
+      pluginProxy("POST", `/jobs/${encodeURIComponent(req.params.id)}/clone`, req.body, reply),
+  );
+
   // Stored-job nesting instances (chamber + per-instance transforms) — the
   // off-print counterpart of /api/job/current/parts. Bare JSON like the other
   // /jobs routes.

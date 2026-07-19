@@ -30,14 +30,13 @@ import { getLatestPrintingStatus } from "./job.js";
 const CAM_W = 650, CAM_H = 600;
 
 // Operator-measured plotter→camera projection (Mission Control's Align
-// mode). Authoritative source: the calibrations table (latest
-// 'plotter_to_camera' row; the web POSTs there on every align save),
-// refreshed into a module cache by the layout recorder's loop; repo .env
-// (VITE_PLOTTER_QUAD/VITE_PLOTTER_FISHEYE) is the bootstrap fallback.
-// quad = the plotter unit square's corners in normalized image coords,
-// order (0,0)(1,0)(1,1)(0,1); k1 = radial fisheye term, corners-pinned.
-// Null until calibrated — then every build_layout event carries it and
-// layer_objects gain derived camera-space bboxes.
+// mode). Sole source: the calibrations table (latest 'plotter_to_camera'
+// row; the web POSTs there on every align save), refreshed into a module
+// cache by the layout recorder's loop. quad = the plotter unit square's
+// corners in normalized image coords, order (0,0)(1,0)(1,1)(0,1); k1 =
+// radial fisheye term, corners-pinned. Null until calibrated — then every
+// build_layout event carries it and layer_objects gain derived
+// camera-space bboxes.
 type Quad = [number, number][];
 let dbCalib: { quad: Quad; k1: number } | null = null;
 
@@ -51,18 +50,11 @@ export async function refreshCalibration(): Promise<void> {
     if (Array.isArray(p?.quad) && p.quad.length === 4) {
       dbCalib = { quad: p.quad as Quad, k1: Number(p.k1) || 0 };
     }
-  } catch { /* table may not exist on first boot — env fallback covers it */ }
+  } catch { /* table may not exist on first boot — stays uncalibrated until a row lands */ }
 }
 
 function plotterToCamera(): { quad: Quad; k1: number } | null {
-  if (dbCalib) return dbCalib;
-  try {
-    const quad = JSON.parse(process.env.VITE_PLOTTER_QUAD ?? "");
-    if (Array.isArray(quad) && quad.length === 4) {
-      return { quad: quad as Quad, k1: Number(process.env.VITE_PLOTTER_FISHEYE) || 0 };
-    }
-  } catch { /* unset or malformed — omit */ }
-  return null;
+  return dbCalib;
 }
 
 // Mirror of the web overlay's projection (MissionControl.tsx): Heckbert

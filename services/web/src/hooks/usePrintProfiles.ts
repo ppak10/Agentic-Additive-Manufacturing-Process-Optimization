@@ -4,6 +4,10 @@ export interface ProfileDesc {
   id: string;
   name: string;
   isDefault: boolean;
+  /** null for profiles the firmware never stamped (most existing ones). */
+  createdAt: string | null;
+  /** Profile file mtime — the reliable date; null only if the file is gone. */
+  modifiedAt: string | null;
 }
 
 // All print profile fields the UI surfaces. Nullable fields inherit from the

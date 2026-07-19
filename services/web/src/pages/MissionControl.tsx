@@ -5,14 +5,12 @@ import { plasma, matrixStats } from "@/lib/thermal";
 import { useCameraStream } from "@/hooks/useCameraStream";
 import { useDefectWatch, type DefectBlob } from "@/hooks/useDefectWatch";
 import { DEFECT_COLORS, DEFECT_ALPHA_FLOOR, extractBlobs } from "@/lib/defects";
-import { PanelConsole } from "@/components/PanelConsole";
 import { JobPanel } from "@/panels/JobPanel";
 import type { JobStatus } from "@/hooks/useJob";
 import { sonarPing, pushNotify } from "@/lib/sonar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Slider } from "@/components/ui/slider";
 import { usePlotterObjects } from "@/hooks/usePlotterObjects";
 import {
@@ -83,7 +81,9 @@ const THERMAL_T_SEED: Quad = [
 // coords — the operator drags the four corners ("Align" mode) until the
 // outlines sit on the actual scan marks; corners persist in localStorage.
 
-function ChamberThermalPane({ phase }: { phase: string | null }) {
+// Exported so the conversation artifact panel can surface the same live feed
+// while a print is running (see panels/ArtifactPanel.tsx).
+export function ChamberThermalPane({ phase }: { phase: string | null }) {
   // object overlays are meaningful only while layers print — PrintCap,
   // Cooling, idle etc. have no current-layer objects by definition
   const printing = phase === "Layers";
@@ -121,6 +121,21 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
   // one opens a small ✓/✕ tooltip whose verdict is scoped to that blob
   const [blobs, setBlobs] = useState<DefectBlob[]>([]);
   const [blobTip, setBlobTip] = useState<DefectBlob | null>(null);
+  // Live defect labeling ("Label" mode): drag a box on the chamber → pick a
+  // class → save a POSITIVE training label to defect_labels (source 'live'),
+  // independent of model alerts. bbox is in normalized 0..1 chamber-frame
+  // coords (same space as the model maps + Triage). build_id comes from
+  // recorder health at submit; frame_ids stay null and get a ±10 window
+  // resolved from the submit ts post-import (live frames have no ids yet).
+  const [labeling, setLabeling] = useState(false);
+  const labelSvgRef = useRef<SVGSVGElement | null>(null);
+  const labelDragStart = useRef<[number, number] | null>(null);
+  const [labelDrag, setLabelDrag] = useState<[number, number, number, number] | null>(null);
+  const [labelPending, setLabelPending] = useState<[number, number, number, number] | null>(null);
+  const [labelClass, setLabelClass] = useState<string>(Object.keys(DEFECT_COLORS)[0] ?? "debris");
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [labelSaved, setLabelSaved] = useState<{ bbox: number[]; cls: string }[]>([]);
+  const [labelMsg, setLabelMsg] = useState<string | null>(null);
   // Sonar + push on each NEW alerting verdict (edge on event id, not
   // level — a persisting alert must not re-ping every poll). Lived in the
   // attention bar until it was replaced by the JobPanel card.
@@ -248,6 +263,89 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
       setExcludeBusy(false);
     }
   };
+
+  // ── live labeling handlers ──
+  // Normalized pointer position within the label SVG (= the chamber image).
+  const labelXY = (e: React.PointerEvent): [number, number] => {
+    const r = labelSvgRef.current!.getBoundingClientRect();
+    return [
+      Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+    ];
+  };
+  const onLabelDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    setLabelMsg(null);
+    labelDragStart.current = labelXY(e);
+    setLabelDrag(null);
+    setLabelPending(null);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onLabelMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!labelDragStart.current) return;
+    const [x0, y0] = labelDragStart.current;
+    const [x1, y1] = labelXY(e);
+    setLabelDrag([Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)]);
+  };
+  const onLabelUp = () => {
+    if (!labelDragStart.current) return;
+    labelDragStart.current = null;
+    setLabelDrag((r) => {
+      // ignore stray clicks; require a box with some area
+      if (r && r[2] - r[0] > 0.01 && r[3] - r[1] > 0.01) setLabelPending(r);
+      return null;
+    });
+  };
+  const submitLabel = async () => {
+    if (!labelPending || labelBusy) return;
+    setLabelBusy(true);
+    setLabelMsg(null);
+    try {
+      // build id + layer from the model's latest inference if running; fall
+      // back to recorder health (build) and the live job's layer counter
+      // (phaseDone during the Layers phase) so labeling works with the model off
+      let buildId = defectLatest?.buildId ?? null;
+      let layer = defectLatest?.layer ?? null;
+      if (buildId == null || layer == null) {
+        try {
+          const [h, j] = await Promise.all([
+            fetch("/api/health/recording").then((r) => (r.ok ? r.json() : null)),
+            fetch("/api/job/current").then((r) => (r.ok ? r.json() : null)),
+          ]);
+          if (buildId == null) buildId = h?.build?.current_build_id ?? null;
+          if (layer == null) layer = j?.phaseDone ?? null;
+        } catch { /* recorder/firmware unreachable */ }
+      }
+      if (buildId == null) {
+        setLabelMsg("no active build to label");
+        return;
+      }
+      const r = await fetch("/defect/labels", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          build_id: buildId,
+          layer,
+          ts: new Date().toISOString(),
+          frame_ids: null, // ±10 window resolved from ts post-import
+          class: labelClass,
+          bbox: labelPending,
+          polarity: "positive",
+          source: "live",
+        }),
+      });
+      if (!r.ok) {
+        setLabelMsg(`save failed (${r.status})`);
+        return;
+      }
+      setLabelSaved((s) => [...s, { bbox: labelPending, cls: labelClass }]);
+      setLabelPending(null);
+      setLabelMsg(`${labelClass} label saved`);
+    } catch {
+      setLabelMsg("bridge unreachable");
+    } finally {
+      setLabelBusy(false);
+    }
+  };
   // Colorize the alerted classes' anomaly maps into one overlay. The maps
   // live in the model's input space = the whole chamber frame resized
   // square, so the canvas just stretches over the full image (unlike the
@@ -255,7 +353,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
   // with the highest probability wins; alpha tracks that probability.
   useEffect(() => {
     const c = defectRef.current;
-    if (!c || !showDefects) return; // no work while hidden
+    if (!c || !showDefects || labeling) return; // no work while hidden / labeling
     const ctx = c.getContext("2d");
     if (!ctx) return;
     const entries = Object.entries(defectMaps ?? {});
@@ -310,7 +408,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [defectMaps, showDefects]);
+  }, [defectMaps, showDefects, labeling]);
   // Stats over BED pixels only (MainBox crop) — full-matrix stats include
   // cold chamber surroundings and understate the bed average.
   const stats = useMemo(() => {
@@ -329,7 +427,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
   // a flat CSS rectangle that visibly disagreed at the edges). Dark halo
   // via strokeText, NOT shadowBlur — canvas shadows janked the pane.
   useEffect(() => {
-    if (!frame || !canvasRef.current || !showTemp) return; // no work while hidden
+    if (!frame || !canvasRef.current || !showTemp || labeling) return; // no work while hidden / labeling
     const { width, values } = frame.data;
     const c = canvasRef.current;
     const S = 2; // supersample for crisp glyphs
@@ -391,7 +489,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
         ctx.fillStyle = `rgb(${r | 0},${g | 0},${b | 0})`;
         ctx.fillText(label, tx, ty);
       }
-  }, [frame, showTemp, PT]);
+  }, [frame, showTemp, PT, labeling]);
   return (
     <Card className="h-full min-h-0 flex flex-col gap-2 py-3">
       <CardHeader className="px-3">
@@ -426,18 +524,47 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                 size="sm"
                 variant={on ? "default" : "neutral"}
                 onClick={() => set((v: boolean) => !v)}
-                title={title}
-                className={cn("h-7 px-2 text-[10px] font-mono", !on && "opacity-60 hover:opacity-100")}
+                disabled={labeling}
+                title={labeling ? "Overlays hidden while labeling" : title}
+                className={cn(
+                  "h-7 px-2 text-[10px] font-mono",
+                  (!on || labeling) && "opacity-60 hover:opacity-100",
+                )}
               >
                 {label}
               </Button>
             ))}
-            {showObjects && (
+            {/* live defect labeling — draw boxes on the chamber, saved as
+                positive training labels (defect_labels, source 'live') */}
+            <Button
+              size="sm"
+              variant="neutral"
+              onClick={() => {
+                setLabeling((v) => !v);
+                setAligning(false);
+                setBlobTip(null);
+                setLabelPending(null);
+                setLabelDrag(null);
+                setLabelMsg(null);
+                // clear the drawn boxes so a new labeling session starts with a
+                // clean bed (they're already persisted to defect_labels)
+                setLabelSaved([]);
+              }}
+              title="Draw defect labels on the live chamber (saved as positive training labels)"
+              className={cn(
+                "h-7 px-2 text-[10px] font-mono",
+                labeling ? "bg-amber-400 text-black" : "opacity-60 hover:opacity-100",
+              )}
+            >
+              {labeling ? "Done labeling" : "Label"}
+            </Button>
+            {showObjects && !labeling && (
               <Button
                 size="sm"
                 variant="neutral"
                 onClick={() => {
                   setAligning((v) => !v);
+                  setLabeling(false);
                 }}
                 title="Drag the four corners until part outlines sit on the rastered marks (perspective homography; saved to the calibrations table)"
                 className={cn(
@@ -447,73 +574,6 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
               >
                 {aligning ? "Done aligning" : "Align"}
               </Button>
-            )}
-            {aligning && (
-              <>
-                <label
-                  className="flex items-center gap-2 text-[10px] font-mono px-2 py-1 rounded-base border-2 border-border bg-secondary-background"
-                  title="Fisheye correction — bows the middle of the bed in/out while the quad corners stay pinned"
-                >
-                  fisheye
-                  <Slider
-                    min={-0.5}
-                    max={0.5}
-                    step={0.01}
-                    value={[k1]}
-                    onValueChange={([v]) => {
-                      if (v === undefined) return;
-                      setCalib((c) => {
-                        saveCalib(c.quad, v);
-                        return { ...c, k1: v };
-                      });
-                    }}
-                    className="w-24"
-                  />
-                  <span className="w-8 text-right">{k1.toFixed(2)}</span>
-                </label>
-                <Button
-                  size="sm"
-                  variant="neutral"
-                  onClick={() => {
-                    const lines =
-                      `VITE_PLOTTER_QUAD=${JSON.stringify(quad.map((c) => c.map((v) => Number(v.toFixed(4)))))}\n` +
-                      `VITE_PLOTTER_FISHEYE=${k1.toFixed(2)}`;
-                    // navigator.clipboard needs a secure context (HTTPS or
-                    // localhost) — LAN http gets the execCommand fallback,
-                    // and worst case a prompt to copy manually.
-                    if (navigator.clipboard?.writeText) {
-                      void navigator.clipboard.writeText(lines);
-                      return;
-                    }
-                    try {
-                      const ta = document.createElement("textarea");
-                      ta.value = lines;
-                      document.body.appendChild(ta);
-                      ta.select();
-                      const ok = document.execCommand("copy");
-                      ta.remove();
-                      if (ok) return;
-                    } catch { /* fall through to prompt */ }
-                    window.prompt("Copy these .env lines:", lines.replace("\n", "  "));
-                  }}
-                  title="Copy the current calibration as .env lines (bootstrap fallback; the DB is authoritative)"
-                  className="h-7 px-2 text-[10px] font-mono opacity-60 hover:opacity-100"
-                >
-                  Copy .env
-                </Button>
-                <Button
-                  size="sm"
-                  variant="neutral"
-                  onClick={() => {
-                    setCalib({ quad: DEFAULT_QUAD, k1: 0 });
-                    saveCalib(DEFAULT_QUAD, 0);
-                  }}
-                  title="Reset to the flat SafeWorkingArea rect, no fisheye"
-                  className="h-7 px-2 text-[10px] font-mono opacity-60 hover:opacity-100"
-                >
-                  Reset
-                </Button>
-              </>
             )}
           </div>
         </CardTitle>
@@ -546,24 +606,65 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                 waiting for chamber…
               </div>
             )}
+            {/* align controls — float over the feed's top-right while
+                aligning (moved out of the card header so they sit with the
+                thing they warp). z-20 keeps them above the align overlay SVG
+                (z-10) and its corner handles. */}
+            {aligning && (
+              <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5">
+                <label
+                  className="flex items-center gap-2 text-[10px] font-mono px-2 py-1 rounded-base border-2 border-border bg-secondary-background"
+                  title="Fisheye correction — bows the middle of the bed in/out while the quad corners stay pinned"
+                >
+                  fisheye
+                  <Slider
+                    min={-0.5}
+                    max={0.5}
+                    step={0.01}
+                    value={[k1]}
+                    onValueChange={([v]) => {
+                      if (v === undefined) return;
+                      setCalib((c) => {
+                        saveCalib(c.quad, v);
+                        return { ...c, k1: v };
+                      });
+                    }}
+                    className="w-24"
+                  />
+                  <span className="w-8 text-right">{k1.toFixed(2)}</span>
+                </label>
+                <Button
+                  size="sm"
+                  variant="neutral"
+                  onClick={() => {
+                    setCalib({ quad: DEFAULT_QUAD, k1: 0 });
+                    saveCalib(DEFAULT_QUAD, 0);
+                  }}
+                  title="Reset to the flat SafeWorkingArea rect, no fisheye"
+                  className="h-7 px-2 text-[10px] font-mono"
+                >
+                  Reset
+                </Button>
+              </div>
+            )}
             {/* full-frame: cells are projected through H∘T per vertex, no
                 CSS placement involved */}
             <canvas
               ref={canvasRef}
               className="absolute inset-0 w-full h-full pointer-events-none"
-              style={{ display: showTemp ? undefined : "none" }}
+              style={{ display: showTemp && !labeling ? undefined : "none" }}
             />
             {/* defect anomaly maps span the full frame (model input = whole
                 chamber view), so this canvas pins to the image, not the bed */}
             <canvas
               ref={defectRef}
               className="absolute inset-0 w-full h-full pointer-events-none"
-              style={{ display: showDefects ? undefined : "none" }}
+              style={{ display: showDefects && !labeling ? undefined : "none" }}
             />
             {/* per-blob feedback layer: one clickable box per connected
                 anomaly region (map space = full frame). Click → ✓/✕ tooltip
                 scoped to THAT blob; answered blobs dim + dash. */}
-            {showDefects && blobs.length > 0 && (
+            {showDefects && !labeling && blobs.length > 0 && (
               <svg
                 viewBox="0 0 1 1"
                 preserveAspectRatio="none"
@@ -594,7 +695,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                 })}
               </svg>
             )}
-            {blobTip && defectLatest?.eventId != null && (
+            {blobTip && !labeling && defectLatest?.eventId != null && (
               <div
                 className="absolute z-20 flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border-2 border-border bg-background shadow-shadow"
                 style={{
@@ -643,7 +744,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                 everything drawn here is excludable. "Align" mode exposes the
                 four quad corners as drag handles; the quad persists in
                 localStorage (agentic-sls.plotter-quad). */}
-            {showObjects && (aligning || (printing && plotterObjects && (plotterObjects.objects.length > 0 || slices.some((sl) => sl.loops.length > 0)))) && (
+            {showObjects && !labeling && (aligning || (printing && plotterObjects && (plotterObjects.objects.length > 0 || slices.some((sl) => sl.loops.length > 0)))) && (
               <svg
                 ref={overlaySvgRef}
                 viewBox={
@@ -756,7 +857,7 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                 )}
               </svg>
             )}
-            {showDefects && defectLatest && Object.keys(defectMaps ?? {}).length > 0 && (
+            {showDefects && !labeling && defectLatest && Object.keys(defectMaps ?? {}).length > 0 && (
               <span className="absolute top-1 right-1 text-[10px] font-mono px-1 rounded bg-black/60 text-white flex gap-2">
                 <span className="opacity-70">layer {defectLatest.layer}</span>
                 {Object.keys(defectMaps ?? {}).map((cls) => {
@@ -768,6 +869,85 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
                   );
                 })}
               </span>
+            )}
+            {/* live labeling overlay — on top (z-30) so drags don't hit the
+                object/defect layers; captures pointer events only in Label
+                mode. Saved boxes stay green for the session. */}
+            {labeling && (
+              <svg
+                ref={labelSvgRef}
+                viewBox="0 0 1 1"
+                preserveAspectRatio="none"
+                className="absolute inset-0 w-full h-full cursor-crosshair"
+                style={{ zIndex: 30, pointerEvents: "auto" }}
+                onPointerDown={onLabelDown}
+                onPointerMove={onLabelMove}
+                onPointerUp={onLabelUp}
+              >
+                {labelSaved.map((d, i) => (
+                  <rect
+                    key={i}
+                    x={d.bbox[0]}
+                    y={d.bbox[1]}
+                    width={d.bbox[2]! - d.bbox[0]!}
+                    height={d.bbox[3]! - d.bbox[1]!}
+                    vectorEffect="non-scaling-stroke"
+                    className="fill-green-500/15 stroke-green-400 [stroke-width:2]"
+                  />
+                ))}
+                {(() => {
+                  const r = labelDrag ?? labelPending;
+                  return r ? (
+                    <rect
+                      x={r[0]}
+                      y={r[1]}
+                      width={r[2] - r[0]}
+                      height={r[3] - r[1]}
+                      vectorEffect="non-scaling-stroke"
+                      className="fill-white/10 stroke-white [stroke-width:2] [stroke-dasharray:5,3]"
+                    />
+                  ) : null;
+                })()}
+              </svg>
+            )}
+            {labeling && labelPending && (
+              <div
+                className="absolute bottom-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 text-[10px] font-mono px-2 py-1 rounded-base border-2 border-border bg-background shadow-shadow"
+                style={{ pointerEvents: "auto" }}
+              >
+                <span className="opacity-60">label as</span>
+                <select
+                  value={labelClass}
+                  onChange={(e) => setLabelClass(e.target.value)}
+                  className="border-2 border-border rounded-base bg-secondary-background px-1.5 py-0.5"
+                  style={{ color: `rgb(${(DEFECT_COLORS[labelClass] ?? [128, 128, 128]).join(",")})` }}
+                >
+                  {Object.keys(DEFECT_COLORS).map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => void submitLabel()}
+                  disabled={labelBusy}
+                  className="px-2 py-0.5 rounded-base border-2 border-border bg-main text-main-foreground disabled:opacity-50"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setLabelPending(null)}
+                  className="px-1.5 opacity-60 hover:opacity-100"
+                >
+                  cancel
+                </button>
+              </div>
+            )}
+            {labeling && labelMsg && (
+              <div
+                className="absolute top-2 left-1/2 -translate-x-1/2 z-40 px-2 py-0.5 rounded-base border-2 border-border bg-green-400 text-black text-[10px] font-heading shadow-shadow"
+                style={{ pointerEvents: "none" }}
+              >
+                {labelMsg}
+              </div>
             )}
             {/* objects-on-layer chip disabled for now — it sat over the
                 bottom-left align handle and intercepted the drag.
@@ -801,59 +981,18 @@ function ChamberThermalPane({ phase }: { phase: string | null }) {
 }
 
 export function MissionControl({ job }: { job: JobStatus | null }) {
-  // Wide monitors (xl+): job card on top, then a DRAGGABLE split — chat
-  // console left, chamber card right, divider between them, each pane
-  // clamped to >=25% width; the split position persists (autoSaveId).
-  // Below xl: the original stack (chamber / job / chat). The two layouts
-  // are separate trees, switched on a matchMedia listener — resizable
-  // panel groups can't be reflowed by CSS alone.
-  const [wide, setWide] = useState(
-    () => window.matchMedia("(min-width: 1280px)").matches,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1280px)");
-    const onChange = (e: MediaQueryListEvent) => setWide(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
-  if (wide) {
-    return (
-      <div className="h-full min-h-0 p-2 flex flex-col gap-2">
-        <div className="min-h-0 overflow-y-auto">
-          <JobPanel job={job} />
-        </div>
-        <ResizablePanelGroup
-          direction="horizontal"
-          autoSaveId="mission-control-split"
-          className="flex-1 min-h-0"
-        >
-          <ResizablePanel minSize={25} defaultSize={50} className="min-h-0">
-            <div className="h-full min-h-0 border-2 border-border mr-1">
-              <PanelConsole />
-            </div>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel minSize={25} defaultSize={50} className="min-h-0">
-            <div className="h-full min-h-0 grid ml-1">
-              <ChamberThermalPane phase={job?.phase ?? null} />
-            </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      </div>
-    );
-  }
-
+  // The agent chat console (PanelConsole) was pulled out of Mission Control
+  // 2026-07-18 — to be reintroduced later if it earns its place. With the
+  // chat gone the page needs no draggable split or wide/narrow layout swap:
+  // one operator watch surface at every width — the job/status card on top,
+  // the chamber feed filling the rest.
   return (
-    <div className="h-full min-h-0 p-2 gap-2 grid grid-cols-1 grid-rows-[minmax(0,45fr)_auto_minmax(0,55fr)]">
-      <div className="min-h-0 grid">
-        <ChamberThermalPane phase={job?.phase ?? null} />
-      </div>
+    <div className="h-full min-h-0 p-2 flex flex-col gap-2">
       <div className="min-h-0 overflow-y-auto">
         <JobPanel job={job} />
       </div>
-      <div className="min-h-0 border-2 border-border">
-        <PanelConsole />
+      <div className="flex-1 min-h-0 grid">
+        <ChamberThermalPane phase={job?.phase ?? null} />
       </div>
     </div>
   );

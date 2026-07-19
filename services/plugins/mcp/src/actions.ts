@@ -10,6 +10,7 @@
 import pg from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { withApproval } from "./approvals.js";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS agent_actions (
@@ -101,16 +102,20 @@ export async function logAction(
   );
 }
 
-// Wrap a set-tool handler so its calls are logged. Errors in logging are
-// reported to stderr and swallowed — the tool result always goes back to
-// the agent unchanged.
+// Wrap a set-tool handler so its calls are (1) gated by the per-conversation
+// approval mode and (2) logged. The approval gate runs FIRST — inside the
+// logged handler — so agent_actions records the final outcome (executed,
+// declined, or refused). Both are no-ops outside a conversation (see
+// withApproval). Logging errors are reported to stderr and swallowed; the
+// tool result always goes back to the agent unchanged.
 export function withActionLog<A>(
   server: McpServer,
   tool: string,
   handler: (args: A) => Promise<CallToolResult>,
 ): (args: A) => Promise<CallToolResult> {
+  const gated = withApproval<A>(tool, handler);
   return async (args: A) => {
-    const result = await handler(args);
+    const result = await gated(args);
     logAction(server, tool, args, result).catch((err) =>
       console.error(`agent_actions log failed for ${tool}:`, err?.message),
     );

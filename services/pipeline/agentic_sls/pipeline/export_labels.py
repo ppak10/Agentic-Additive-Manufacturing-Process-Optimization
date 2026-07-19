@@ -60,6 +60,55 @@ SCHEMA = pa.schema([
 ])
 
 
+# ±N chamber-frame window around a live label's submit timestamp. Live labels
+# ("Label" mode on the Mission Control chamber) are written with frame_ids NULL
+# because live frames have no ids yet — they get BIGSERIAL ids only at
+# post-build import. This resolves the window once those ids exist: find the
+# chamber frame nearest the label's ts, take ±WINDOW around it by order, and
+# store their ids. Idempotent (only touches NULL frame_ids) and re-runnable.
+FRAME_WINDOW = 10
+
+
+def resolve_live_label_frames(cur, build_id: int | None) -> int:
+    where = "source = 'live' AND frame_ids IS NULL AND ts IS NOT NULL AND status = 'active'"
+    params: list[object] = []
+    if build_id is not None:
+        where += " AND build_id = %s"
+        params.append(build_id)
+    cur.execute(f"SELECT id, build_id, ts FROM defect_labels WHERE {where}", params)
+    pending = cur.fetchall()
+
+    resolved = 0
+    for label_id, bid, ts in pending:
+        cur.execute(
+            """
+            WITH ordered AS (
+              SELECT id, ts, row_number() OVER (ORDER BY ts) AS rn
+              FROM frames WHERE build_id = %s AND kind = 'chamber'
+            ), center AS (
+              SELECT rn FROM ordered
+              ORDER BY abs(extract(epoch FROM (ts - %s))) LIMIT 1
+            )
+            SELECT array_agg(o.id ORDER BY o.rn)
+            FROM ordered o, center c
+            WHERE o.rn BETWEEN c.rn - %s AND c.rn + %s
+            """,
+            (bid, ts, FRAME_WINDOW, FRAME_WINDOW),
+        )
+        row = cur.fetchone()
+        frame_ids = row[0] if row else None
+        if frame_ids:
+            cur.execute(
+                "UPDATE defect_labels SET frame_ids = %s, updated_at = now() WHERE id = %s",
+                (frame_ids, label_id),
+            )
+            resolved += 1
+
+    if resolved:
+        print(f"  resolved ±{FRAME_WINDOW} chamber-frame window for {resolved} live label(s)")
+    return resolved
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=int, default=None, help="export a single build id")
@@ -82,6 +131,8 @@ def main() -> int:
         params.append(args.build)
 
     with psycopg.connect(args.dsn) as conn, conn.cursor() as cur:
+        # backfill live labels' ±10 frame window now that frames have ids
+        resolve_live_label_frames(cur, args.build)
         cur.execute(
             f"SELECT {', '.join(COLUMNS)} FROM defect_labels WHERE {where} ORDER BY build_id, id",
             params,

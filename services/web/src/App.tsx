@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
-  Bot,
   MessageSquare,
   ChevronDown,
   Factory,
-  Tag,
+  Plus,
   Radar,
   Settings,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -32,11 +33,11 @@ import { Dashboard } from "@/pages/Dashboard";
 import { Recording } from "@/pages/Recording";
 import { Builds } from "@/pages/Builds";
 import { BuildCard } from "@/pages/BuildCard";
+import { BuildLayout } from "@/pages/BuildLayout";
 import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { PowderTuning } from "@/pages/PowderTuning";
-import { Agents } from "@/pages/Agents";
 import { ServiceDetail } from "@/pages/Services";
 import { MissionControl } from "@/pages/MissionControl";
 import { SettingsPage } from "@/pages/Settings";
@@ -48,13 +49,14 @@ import { useJob, type JobStatus } from "@/hooks/useJob";
 import { useConversations } from "@/hooks/useConversations";
 import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { ArtifactSplit, ArtifactProvider, useCurrentArtifacts } from "@/panels/ArtifactPanel";
 
 const NAV_GROUPS = [
   {
     label: "Live",
     items: [
       { to: "/mission", label: "Mission Control", icon: Radar, end: false },
-      { to: "/labeling", label: "Triage", icon: Tag, end: false },
+      // Triage moved to a per-build view (/builds/:id/triage) 2026-07-19
     ],
   },
 ] as const;
@@ -63,15 +65,17 @@ const NAV_GROUPS = [
 // pattern: Collapsible + SidebarMenuSub), holding the printer-library
 // pages. Rendered between Live and Tuning.
 const MACHINE_ITEMS = [
-  { to: "/builds", label: "Builds" },
-  { to: "/profiles", label: "Profiles" },
   { to: "/jobs", label: "Jobs" },
+  { to: "/profiles", label: "Print Profiles" },
+  { to: "/builds", label: "Builds" },
   { to: "/powder-tuning", label: "Powder Tuning" },
 ] as const;
 
 // ChatGPT-style recent-conversations list: the agent plane's history,
 // one link per conversation (panel console, chats, headless runs), plus
-// the full Sessions table as the tail item.
+// the full Sessions table as the tail item. "+ New conversation" is just
+// a link — the draft page (/conversations/new) owns the picker, and no
+// conversation record exists until the first message is sent.
 function ConversationsNav() {
   const location = useLocation();
   const conversations = useConversations(12);
@@ -79,6 +83,18 @@ function ConversationsNav() {
     <SidebarGroup className="border-b-0">
       <SidebarGroupLabel>Conversations</SidebarGroupLabel>
       <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            asChild
+            tooltip="New conversation"
+            isActive={location.pathname === "/conversations/new"}
+          >
+            <NavLink to="/conversations/new">
+              <Plus />
+              <span>New conversation</span>
+            </NavLink>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         {(conversations ?? []).map((c) => {
           const to = `/conversations/${c.id}`;
           return (
@@ -88,28 +104,19 @@ function ConversationsNav() {
                 tooltip={c.title ?? `conversation ${c.id}`}
                 isActive={location.pathname === to}
               >
-                <NavLink to={to}>
+                <NavLink to={to} className={c.debug ? "opacity-50" : undefined}>
                   <MessageSquare />
                   <span className="truncate">
                     {c.title?.trim() || `${c.role} · ${c.harness} #${c.id}`}
                   </span>
+                  {c.debug && (
+                    <span className="ml-auto text-[9px] font-mono uppercase opacity-70">dbg</span>
+                  )}
                 </NavLink>
               </SidebarMenuButton>
             </SidebarMenuItem>
           );
         })}
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            asChild
-            tooltip="All sessions"
-            isActive={location.pathname.startsWith("/agents")}
-          >
-            <NavLink to="/agents">
-              <Bot />
-              <span className="opacity-70">All sessions</span>
-            </NavLink>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>
   );
@@ -151,7 +158,7 @@ function MachineNav() {
   );
 }
 
-function AppSidebar() {
+function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () => void }) {
   const location = useLocation();
 
   return (
@@ -200,6 +207,15 @@ function AppSidebar() {
               </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={onToggleDark}
+              tooltip={dark ? "Light mode" : "Dark mode"}
+            >
+              {dark ? <Sun /> : <Moon />}
+              <span>{dark ? "Light mode" : "Dark mode"}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
@@ -208,9 +224,21 @@ function AppSidebar() {
 
 function AppShell() {
   const [dark, setDark] = useState(false);
+  const location = useLocation();
   // Single useJob call for the whole app — used by the header system stats
   // and passed down to Dashboard panels (JobPanel, BuildLayoutPanel).
   const job = useJob(1000);
+
+  // The artifact panel is rendered here, at the shell level, so it spans the
+  // full main area (beside the breadcrumb row rather than clipped under it).
+  // Pages publish their artifacts via useSetArtifacts; we render the one split.
+  const artifacts = useCurrentArtifacts();
+  // per-surface divider width (keying the split also resets its open/close
+  // state when the surface type changes). Only conversations publish an
+  // artifact today; other paths get the generic id and simply show no panel.
+  const artifactStorageId = location.pathname.startsWith("/conversations")
+    ? "conversation-artifact-split"
+    : "artifact-split";
 
   useEffect(() => {
     if (window.matchMedia("(prefers-color-scheme: dark)").matches) setDark(true);
@@ -222,7 +250,7 @@ function AppShell() {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <AppSidebar />
+      <AppSidebar dark={dark} onToggleDark={() => setDark((d) => !d)} />
       {/* h-svh caps the shell at the viewport so page-internal scroll areas
           (e.g. the Jobs data-table) engage instead of growing the window */}
       <SidebarInset className="flex flex-col min-h-0 h-svh">
@@ -235,7 +263,12 @@ function AppShell() {
             <RecordingStatusBanner />
           </div>
         </header>
-        <main className="flex-1 min-h-0 overflow-auto flex flex-col">
+        <main className="flex-1 min-h-0 flex flex-col">
+          {/* artifact panel is hoisted here so it spans the whole main area,
+              alongside the breadcrumb row — the breadcrumbs + routes are its
+              left pane; key on storageId so switching surfaces remounts it */}
+          <ArtifactSplit key={artifactStorageId} artifacts={artifacts} storageId={artifactStorageId}>
+          <div className="h-full min-h-0 overflow-auto flex flex-col">
           {/* docs-style breadcrumb: top-left of the page content; pages can
               portal actions into the right end of the row (#breadcrumb-actions) */}
           <div className="px-4 pt-3 shrink-0 flex items-center justify-between gap-2">
@@ -250,17 +283,25 @@ function AppShell() {
             {/* legacy path — Recording page now lives under the recorder service */}
             <Route path="/recording" element={<Navigate to="/services/recorder" replace />} />
             <Route path="/builds" element={<Builds />} />
-            <Route path="/builds/:buildId" element={<BuildCard />} />
-            <Route path="/builds/:buildId/replay" element={<Replay />} />
+            {/* Tabbed build shell: stats (index) · replay · triage. Nested so
+                the tab bar persists and :buildId flows to every tab. */}
+            <Route path="/builds/:buildId" element={<BuildLayout />}>
+              <Route index element={<BuildCard />} />
+              <Route path="replay" element={<Replay />} />
+              {/* Triage is scoped to a build (was the global /labeling page) */}
+              <Route path="triage" element={<Labeling />} />
+            </Route>
             {/* legacy paths */}
             <Route path="/database" element={<Navigate to="/builds" replace />} />
             <Route path="/database/:buildId/replay" element={<Replay />} />
-            <Route path="/profiles" element={<PrintProfiles />} />
+            {/* selection is route-backed via ONE optional-param route (same
+                pattern as /jobs/:id? — two routes would remount the page) */}
+            <Route path="/profiles/:id?" element={<PrintProfiles />} />
             <Route path="/jobs/:id?" element={<Jobs />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
-            <Route path="/agents" element={<Agents />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
-            <Route path="/labeling" element={<Labeling />} />
+            {/* legacy global triage path — now a per-build view under /builds */}
+            <Route path="/labeling" element={<Navigate to="/builds" replace />} />
             <Route path="/conversations/:id" element={<ConversationPage />} />
             <Route path="/datasets/:slug" element={<DatasetPage />} />
             <Route path="/datasets/telemetry/:buildId" element={<TelemetryBuildLab />} />
@@ -270,6 +311,8 @@ function AppShell() {
             <Route path="/settings" element={<SettingsPage dark={dark} onToggleDark={() => setDark((d) => !d)} />} />
           </Routes>
           </div>
+          </div>
+          </ArtifactSplit>
         </main>
       </SidebarInset>
       {/* The right-docked agent sidebar is gone (2026-07-16): Mission
@@ -281,7 +324,9 @@ function AppShell() {
 export function App() {
   return (
     <BrowserRouter>
-      <AppShell />
+      <ArtifactProvider>
+        <AppShell />
+      </ArtifactProvider>
     </BrowserRouter>
   );
 }

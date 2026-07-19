@@ -52,7 +52,6 @@ for (const s of rows) {
     conversationId = await createConversation(pool, {
       harness: s.harness,
       role: isChatTurn ? "chat" : s.role,
-      preset: s.role?.startsWith("chat:") ? s.role.slice(5) : null,
       buildId: s.build_id,
       transcriptDir: key,
       createdAt: s.started_at,

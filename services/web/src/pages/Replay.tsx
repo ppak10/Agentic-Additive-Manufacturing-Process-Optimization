@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, Navigate } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { useParams, Navigate } from "react-router-dom";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useReplayManifest, findNearestFrame } from "@/hooks/useReplayManifest";
@@ -231,14 +230,10 @@ export function Replay() {
 
   return (
     <div className="p-4 grid gap-4">
+      {/* build identity lives in the breadcrumb + build tabs (BuildLayout);
+          keep only the job label + live/done status here */}
       <div className="flex items-center gap-3">
-        <Link to="/builds" className="flex items-center gap-1 text-xs underline opacity-70 hover:opacity-100">
-          <ArrowLeft className="size-3" /> back
-        </Link>
-        <h2 className="font-heading">
-          Build #{manifest.build.id}{" "}
-          <span className="opacity-70 font-base">· {manifest.build.job_name ?? "(unnamed)"}</span>
-        </h2>
+        <span className="text-sm opacity-70">{manifest.build.job_name ?? "(unnamed)"}</span>
         <Badge variant={manifest.build.ended_at ? "neutral" : "default"}>
           {manifest.build.ended_at ? "done" : "live"}
         </Badge>

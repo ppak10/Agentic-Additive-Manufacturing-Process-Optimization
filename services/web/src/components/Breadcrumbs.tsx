@@ -32,10 +32,18 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
       const out: Crumb[] = [{ label: "Builds", to: "/builds" }];
       if (rest[0]) out.push({ label: `Build ${rest[0]}`, to: `/builds/${rest[0]}` });
       if (rest[1] === "replay") out.push({ label: "Replay" });
+      if (rest[1] === "triage") out.push({ label: "Triage" });
       return out;
     }
-    case "profiles":
-      return [{ label: "Profiles" }];
+    case "profiles": {
+      if (!rest[0]) return [{ label: "Print Profiles" }];
+      // profile names live on the printer — pages pass them via
+      // location.state.breadcrumb (same pattern as jobs)
+      return [
+        { label: "Print Profiles", to: "/profiles" },
+        { label: hint ?? `Profile ${rest[0].slice(0, 8)}` },
+      ];
+    }
     case "jobs": {
       if (!rest[0]) return [{ label: "Jobs" }];
       // job names live on the printer, not in the URL — pages pass them via
@@ -47,15 +55,13 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
     }
     case "powder-tuning":
       return [{ label: "Powder Tuning" }];
-    case "agents":
-      return [{ label: "Conversations" }, { label: "All sessions" }];
     case "conversations":
       return [
         { label: "Conversations" },
-        ...(rest[0] ? [{ label: `Conversation ${rest[0]}` }] : []),
+        ...(rest[0]
+          ? [{ label: rest[0] === "new" ? "New conversation" : `Conversation ${rest[0]}` }]
+          : []),
       ];
-    case "labeling":
-      return [{ label: "Labeling" }, { label: "Triage" }];
     case "datasets": {
       // dataset pages live under Settings since the sidebar group moved
       // there (2026-07-16) — the crumb trail is the way back

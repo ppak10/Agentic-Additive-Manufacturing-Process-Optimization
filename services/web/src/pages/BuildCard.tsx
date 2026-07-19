@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SESSION_RESULT, fmtHours } from "./Builds";
@@ -103,12 +103,7 @@ export function BuildCard() {
   }, [buildId]);
 
   if (error) {
-    return (
-      <div className="p-4">
-        <Link to="/builds" className="text-xs underline opacity-70">← builds</Link>
-        <div className="mt-4 text-sm opacity-70">{error}</div>
-      </div>
-    );
+    return <div className="p-4 text-sm opacity-70">{error}</div>;
   }
   if (!data) return <div className="p-4 text-sm opacity-60">loading…</div>;
 
@@ -117,18 +112,12 @@ export function BuildCard() {
 
   return (
     <div className="p-4 grid gap-4">
-      <div className="flex items-center gap-3 flex-wrap">
-        <Link to="/builds" className="text-xs underline opacity-70">← builds</Link>
-        <h2 className="font-heading">Build {reg.build_id}</h2>
+      {/* identity + primary nav now live in the breadcrumb row and the build
+          tabs (BuildLayout); this keeps just the at-a-glance status badges */}
+      <div className="flex items-center gap-2 flex-wrap">
         {res && <Badge variant={res.variant}>{res.label}</Badge>}
         {!reg.ended_at && <Badge>live</Badge>}
         {reg.has_astm && <Badge variant="neutral">ASTM tested</Badge>}
-        <Link
-          to={`/builds/${reg.build_id}/replay`}
-          className="ml-auto text-xs underline opacity-70 hover:opacity-100"
-        >
-          replay →
-        </Link>
       </div>
 
       <Card>

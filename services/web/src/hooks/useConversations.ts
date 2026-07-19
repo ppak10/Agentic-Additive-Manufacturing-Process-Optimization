@@ -11,6 +11,15 @@ export interface ConversationSummary {
   role: string;
   model: string | null;
   title: string | null;
+  debug: boolean;
+}
+
+const REFRESH_EVENT = "conversations:refresh";
+
+// Nudge every mounted useConversations to refetch now (e.g. right after
+// creating a conversation) instead of waiting out the slow poll.
+export function refreshConversations(): void {
+  window.dispatchEvent(new Event(REFRESH_EVENT));
 }
 
 export function useConversations(limit = 15, intervalMs = 30_000): ConversationSummary[] | null {
@@ -25,9 +34,12 @@ export function useConversations(limit = 15, intervalMs = 30_000): ConversationS
     };
     void tick();
     const t = setInterval(tick, intervalMs);
+    const onRefresh = () => void tick();
+    window.addEventListener(REFRESH_EVENT, onRefresh);
     return () => {
       cancelled = true;
       clearInterval(t);
+      window.removeEventListener(REFRESH_EVENT, onRefresh);
     };
   }, [limit, intervalMs]);
   return rows;

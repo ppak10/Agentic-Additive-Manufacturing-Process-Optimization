@@ -1,21 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import {
+  ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight,
+  Loader2, Plus, RefreshCw, Trash2,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
+} from "@/components/ui/form";
 import { cn } from "@/lib/utils";
 import { type PrintProfile, usePrintProfiles } from "@/hooks/usePrintProfiles";
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// Print Profiles — same architecture as the Jobs page: selection is
+// route-backed via /profiles/:id? (crumb label rides location.state),
+// sortable/paginated data-table on the left, detail card on the right.
+// The detail card is a react-hook-form (neobrutalism Form registry
+// component) over every surfaced profile field; null = inherit from the
+// system Default profile.
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 // "00:00:05.0000000" → "5" (seconds as string for the input)
 function delayToSeconds(s: string | null): string {
   if (!s) return "";
   const parts = s.split(":");
   if (parts.length !== 3) return "";
-  const h = parseFloat(parts[0]!);
-  const m = parseFloat(parts[1]!);
-  const sec = parseFloat(parts[2]!);
-  const total = h * 3600 + m * 60 + sec;
+  const total = parseFloat(parts[0]!) * 3600 + parseFloat(parts[1]!) * 60 + parseFloat(parts[2]!);
   return isFinite(total) ? String(total) : "";
 }
 
@@ -29,138 +46,165 @@ function secondsToDelay(s: string): string | null {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-// ── small field components ────────────────────────────────────────────────────
+// ── breadcrumb-row actions portal (same as Jobs) ──────────────────────────────
+
+function BreadcrumbActions({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<Element | null>(null);
+  useEffect(() => {
+    setTarget(document.getElementById("breadcrumb-actions"));
+  }, []);
+  return target ? createPortal(children, target) : null;
+}
+
+// ── sortable column header (Jobs pattern) ─────────────────────────────────────
+
+type SortKey = "name" | "date";
+type SortDir = 1 | -1;
+
+function SortHead({
+  label, sortKey, sort, onSort, className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: { key: SortKey; dir: SortDir };
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <TableHead className={cn("h-8 px-2", className)}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="flex w-full items-center gap-1 text-xs font-heading"
+      >
+        {label}
+        {active ? (
+          sort.dir === 1 ? <ArrowUp className="size-3 shrink-0" /> : <ArrowDown className="size-3 shrink-0" />
+        ) : (
+          <ArrowUpDown className="size-3 shrink-0 opacity-40" />
+        )}
+      </button>
+    </TableHead>
+  );
+}
 
 const inputCls =
-  "border-2 border-border rounded-base px-2 py-1 bg-secondary-background text-foreground text-xs w-36 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-main";
+  "border-2 border-border rounded-base px-2 py-1 bg-secondary-background text-foreground text-xs disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-main";
 
-function FieldRow({ label, unit, children }: { label: string; unit?: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[minmax(160px,auto)_1fr] items-center gap-3 text-xs">
-      <label className="opacity-70">{label}{unit ? <span className="opacity-60"> ({unit})</span> : null}</label>
-      <div className="flex items-center gap-2">{children}</div>
-    </div>
-  );
+// ── field spec: every surfaced profile field, data-driven ─────────────────────
+
+type FieldKind = "num" | "delay" | "bool" | "material";
+
+interface FieldSpec {
+  key: string;
+  label: string;
+  unit?: string;
+  kind: FieldKind;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
-function NumField({
-  label, unit, draftKey, draft, onChange, integer = false, min, max, step,
-}: {
-  label: string; unit?: string; draftKey: string;
-  draft: Record<string, unknown>; onChange: (key: string, v: unknown) => void;
-  integer?: boolean; min?: number; max?: number; step?: number;
-}) {
-  const raw = draft[draftKey];
-  const [local, setLocal] = useState(raw == null ? "" : String(raw));
-  const prevRaw = useRef(raw);
-  if (prevRaw.current !== raw) { prevRaw.current = raw; setLocal(raw == null ? "" : String(raw)); }
+const MATERIALS = ["NotSet", "PA11", "PA12", "TPU", "Custom1", "Custom2", "Custom3", "Custom4", "Custom5"];
 
-  const commit = () => {
-    const t = local.trim();
-    if (t === "") { onChange(draftKey, null); return; }
-    const n = integer ? parseInt(t, 10) : parseFloat(t);
-    if (!isFinite(n)) return;
-    if (min != null && n < min) return;
-    if (max != null && n > max) return;
-    onChange(draftKey, n);
-  };
+const SECTIONS: { title: string; defaultOpen?: boolean; fields: FieldSpec[] }[] = [
+  {
+    title: "General",
+    fields: [
+      { key: "material", label: "Material", kind: "material" },
+      // thickness fields are MICROMETERS in the firmware (layer 100,
+      // bed prep 13000) — the old mm labels/ranges could never edit them
+      { key: "layerThickness", label: "Layer thickness", unit: "µm", kind: "num", min: 50, max: 300, step: 10 },
+      { key: "recoaterPasses", label: "Recoater passes", kind: "num", min: 1, max: 10, step: 1 },
+      { key: "recoaterPowderSpeedPercent", label: "Powder zone speed", unit: "%", kind: "num", min: 1, max: 200, step: 1 },
+      { key: "recoaterPrintSpeedPercent", label: "Print bed speed", unit: "%", kind: "num", min: 1, max: 200, step: 1 },
+    ],
+  },
+  {
+    title: "Heating",
+    fields: [
+      { key: "heatingTargetPowder", label: "Target: powder", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "heatingTargetPrint", label: "Target: print", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "heatingTargetPrintBed", label: "Target: print bed", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "heatingRate", label: "Heating rate", kind: "num", min: 0, max: 100, step: 0.1 },
+      { key: "heatingThreshold", label: "Heating threshold", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "surfaceTarget", label: "Surface target", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+    ],
+  },
+  {
+    title: "Layer Temperatures",
+    fields: [
+      { key: "beginLayerTemperatureTarget", label: "Begin layer target", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "beginLayerTemperatureDelay", label: "Begin layer delay", unit: "s", kind: "delay" },
+      { key: "bedPreparationTemperatureTarget", label: "Bed prep target", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "bedPreparationTemperatureDelay", label: "Bed prep delay", unit: "s", kind: "delay" },
+      { key: "bedPreparationThickness", label: "Bed prep thickness", unit: "µm", kind: "num", min: 0, max: 50000, step: 500 },
+      { key: "printCapTemperatureTarget", label: "Print cap target", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "printCapTemperatureDelay", label: "Print cap delay", unit: "s", kind: "delay" },
+      { key: "printCapThickness", label: "Print cap thickness", unit: "µm", kind: "num", min: 0, max: 50000, step: 500 },
+    ],
+  },
+  {
+    title: "Laser",
+    fields: [
+      { key: "laserOnPercent", label: "Laser on", unit: "%", kind: "num", min: 0, max: 100, step: 0.5 },
+      { key: "totalEnergyDensityPercent", label: "Total energy", unit: "%", kind: "num", min: 1, max: 500, step: 1 },
+      { key: "laserFirstOutlineEnergyDensity", label: "First outline energy", kind: "num", min: 0, max: 100, step: 0.5 },
+      { key: "laserOtherOutlineEnergyDensity", label: "Other outline energy", kind: "num", min: 0, max: 100, step: 0.5 },
+      { key: "laserFillEnergyDensity", label: "Fill energy", kind: "num", min: 0, max: 100, step: 0.5 },
+      { key: "outlineCount", label: "Outline count", kind: "num", min: 0, max: 20, step: 1 },
+      { key: "isFillEnabled", label: "Fill enabled", kind: "bool" },
+    ],
+  },
+  {
+    title: "Cooling",
+    defaultOpen: false,
+    fields: [
+      { key: "coolingTarget", label: "Cooling target", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "coolingThreshold1", label: "Threshold 1", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "coolingThreshold2", label: "Threshold 2", unit: "°C", kind: "num", min: 0, max: 200, step: 0.5 },
+      { key: "coolingRate1", label: "Rate 1", kind: "num", min: 0, max: 100, step: 0.1 },
+      { key: "coolingRate2", label: "Rate 2", kind: "num", min: 0, max: 100, step: 0.1 },
+    ],
+  },
+];
 
-  return (
-    <FieldRow label={label} unit={unit}>
-      <input
-        type="number" value={local} step={step}
-        min={min} max={max}
-        className={inputCls}
-        placeholder="(default)"
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
-      />
-    </FieldRow>
-  );
+const ALL_FIELDS = SECTIONS.flatMap((s) => s.fields);
+
+// Form state is all strings ("" = inherit Default); converted on submit.
+type FormValues = Record<string, string>;
+
+function toForm(p: PrintProfile): FormValues {
+  const v: FormValues = { name: p.name ?? "" };
+  for (const f of ALL_FIELDS) {
+    const raw = p[f.key];
+    if (f.kind === "delay") v[f.key] = delayToSeconds((raw as string | null) ?? null);
+    else if (f.kind === "bool") v[f.key] = raw == null ? "" : String(raw);
+    else v[f.key] = raw == null ? "" : String(raw);
+  }
+  return v;
 }
 
-function DelayField({
-  label, draftKey, draft, onChange,
-}: {
-  label: string; draftKey: string;
-  draft: Record<string, unknown>; onChange: (key: string, v: unknown) => void;
-}) {
-  const raw = draft[draftKey] as string | null | undefined;
-  const [local, setLocal] = useState(delayToSeconds(raw ?? null));
-  const prevRaw = useRef(raw);
-  if (prevRaw.current !== raw) { prevRaw.current = raw; setLocal(delayToSeconds(raw ?? null)); }
-
-  const commit = () => {
-    const t = local.trim();
-    onChange(draftKey, t === "" ? null : secondsToDelay(t));
-  };
-
-  return (
-    <FieldRow label={label} unit="s">
-      <input
-        type="number" value={local} min={0} step={1}
-        className={inputCls}
-        placeholder="(default)"
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
-      />
-    </FieldRow>
-  );
-}
-
-function SelectField({
-  label, draftKey, draft, onChange, options,
-}: {
-  label: string; draftKey: string;
-  draft: Record<string, unknown>; onChange: (key: string, v: unknown) => void;
-  options: { value: string | null; label: string }[];
-}) {
-  const raw = (draft[draftKey] as string | null | undefined) ?? null;
-  return (
-    <FieldRow label={label}>
-      <select
-        value={raw ?? ""}
-        className={cn(inputCls, "w-auto pr-6")}
-        onChange={(e) => onChange(draftKey, e.target.value === "" ? null : e.target.value)}
-      >
-        {options.map((o) => (
-          <option key={o.value ?? "__null"} value={o.value ?? ""}>{o.label}</option>
-        ))}
-      </select>
-    </FieldRow>
-  );
-}
-
-function BoolField({
-  label, draftKey, draft, onChange,
-}: {
-  label: string; draftKey: string;
-  draft: Record<string, unknown>; onChange: (key: string, v: unknown) => void;
-}) {
-  const raw = draft[draftKey] as boolean | null | undefined;
-  return (
-    <FieldRow label={label}>
-      <select
-        value={raw == null ? "" : String(raw)}
-        className={cn(inputCls, "w-auto pr-6")}
-        onChange={(e) => {
-          const v = e.target.value;
-          onChange(draftKey, v === "" ? null : v === "true");
-        }}
-      >
-        <option value="">(default)</option>
-        <option value="true">Yes</option>
-        <option value="false">No</option>
-      </select>
-    </FieldRow>
-  );
+// PUT body: every surfaced field with its current value ("" → null =
+// revert to inheriting the Default); unsurfaced fields aren't sent, so the
+// server leaves them as stored.
+function toPatch(v: FormValues): Record<string, unknown> {
+  const patch: Record<string, unknown> = { name: v.name.trim() || null };
+  for (const f of ALL_FIELDS) {
+    const s = (v[f.key] ?? "").trim();
+    if (s === "") patch[f.key] = null;
+    else if (f.kind === "delay") patch[f.key] = secondsToDelay(s);
+    else if (f.kind === "bool") patch[f.key] = s === "true";
+    else if (f.kind === "material") patch[f.key] = s;
+    else patch[f.key] = Number(s);
+  }
+  return patch;
 }
 
 // ── collapsible section ───────────────────────────────────────────────────────
 
-function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+function Section({ title, children, defaultOpen = true }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div>
@@ -177,46 +221,9 @@ function Section({ title, children, defaultOpen = true }: { title: string; child
   );
 }
 
-// ── material options (enum strings from the .NET model) ───────────────────────
+// ── detail / edit form ────────────────────────────────────────────────────────
 
-const MATERIAL_OPTIONS: { value: string | null; label: string }[] = [
-  { value: null, label: "(default)" },
-  { value: "NotSet", label: "Not set" },
-  { value: "PA11", label: "PA11" },
-  { value: "PA12", label: "PA12" },
-  { value: "TPU", label: "TPU" },
-  { value: "Custom1", label: "Custom 1" },
-  { value: "Custom2", label: "Custom 2" },
-  { value: "Custom3", label: "Custom 3" },
-  { value: "Custom4", label: "Custom 4" },
-  { value: "Custom5", label: "Custom 5" },
-];
-
-// ── edit form ─────────────────────────────────────────────────────────────────
-
-// Builds the PUT body: only the fields the form exposes, with their current
-// draft values. Fields not in this list are not sent, preserving whatever the
-// stored profile has for them.
-function buildPatch(draft: Record<string, unknown>): Record<string, unknown> {
-  const FORM_KEYS = [
-    "name", "material", "layerThickness", "recoaterPasses",
-    "recoaterPowderSpeedPercent", "recoaterPrintSpeedPercent",
-    "heatingTargetPowder", "heatingTargetPrint", "heatingTargetPrintBed",
-    "heatingRate", "heatingThreshold", "surfaceTarget",
-    "beginLayerTemperatureTarget", "beginLayerTemperatureDelay",
-    "bedPreparationTemperatureTarget", "bedPreparationTemperatureDelay",
-    "bedPreparationThickness",
-    "printCapTemperatureTarget", "printCapTemperatureDelay", "printCapThickness",
-    "laserOnPercent", "totalEnergyDensityPercent",
-    "laserFirstOutlineEnergyDensity", "laserOtherOutlineEnergyDensity",
-    "laserFillEnergyDensity", "outlineCount", "isFillEnabled",
-    "coolingTarget", "coolingThreshold1", "coolingThreshold2",
-    "coolingRate1", "coolingRate2",
-  ];
-  return Object.fromEntries(FORM_KEYS.map((k) => [k, draft[k] ?? null]));
-}
-
-function EditForm({
+function ProfileForm({
   profile,
   isDefault,
   onSave,
@@ -227,31 +234,32 @@ function EditForm({
   onSave: (patch: Record<string, unknown>) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<Record<string, unknown>>({ ...profile });
+  const form = useForm<FormValues>({ defaultValues: toForm(profile) });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset draft when a different profile is loaded.
-  const profileId = profile.id;
-  useEffect(() => { setDraft({ ...profile }); setError(null); setConfirmDelete(false); }, [profileId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Reset when a different profile is loaded (or a save returns fresh data).
+  useEffect(() => {
+    form.reset(toForm(profile));
+    setError(null);
+    setConfirmDelete(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile]);
 
-  const onChange = useCallback((key: string, value: unknown) => {
-    setDraft((d) => ({ ...d, [key]: value }));
-  }, []);
-
-  const save = async () => {
+  const submit = form.handleSubmit(async (values) => {
+    if (!values.name.trim()) { setError("Name cannot be empty"); return; }
     setSaving(true);
     setError(null);
     try {
-      await onSave(buildPatch(draft));
+      await onSave(toPatch(values));
     } catch (e) {
       setError((e as Error).message ?? String(e));
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   const doDelete = async () => {
     setDeleting(true);
@@ -265,249 +273,353 @@ function EditForm({
     }
   };
 
-  const nameVal = (draft["name"] as string | null) ?? "";
+  const fieldRow = (f: FieldSpec) => (
+    <FormField
+      key={f.key}
+      control={form.control}
+      name={f.key}
+      render={({ field }) => (
+        <FormItem className="grid grid-cols-[minmax(160px,auto)_1fr] items-center gap-3 space-y-0">
+          <FormLabel className="text-xs font-base opacity-70">
+            {f.label}
+            {f.unit ? <span className="opacity-60"> ({f.unit})</span> : null}
+          </FormLabel>
+          <FormControl>
+            {f.kind === "material" ? (
+              <select {...field} className={cn(inputCls, "w-auto pr-6")}>
+                <option value="">(default)</option>
+                {MATERIALS.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : f.kind === "bool" ? (
+              <select {...field} className={cn(inputCls, "w-auto pr-6")}>
+                <option value="">(default)</option>
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+            ) : (
+              <Input
+                {...field}
+                type="number"
+                min={f.kind === "delay" ? 0 : f.min}
+                max={f.max}
+                step={f.kind === "delay" ? 1 : f.step}
+                placeholder="(default)"
+                className="w-36 h-7 text-xs bg-secondary-background"
+              />
+            )}
+          </FormControl>
+          <FormMessage className="col-span-2" />
+        </FormItem>
+      )}
+    />
+  );
 
   return (
-    <div className="flex flex-col gap-4 h-full">
-      {/* header row */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <input
-          type="text"
-          value={nameVal}
-          placeholder="Profile name"
-          className={cn(inputCls, "w-56 text-sm font-heading")}
-          onChange={(e) => onChange("name", e.target.value || null)}
-        />
-        <Button size="sm" onClick={() => void save()} disabled={saving || deleting}>
-          {saving ? <Loader2 className="size-3 animate-spin" /> : null}
-          Save
-        </Button>
-        {!isDefault && (
-          confirmDelete ? (
-            <>
-              <span className="text-xs opacity-70">Delete this profile?</span>
-              <Button size="sm" variant="neutral" onClick={() => void doDelete()} disabled={deleting}>
-                {deleting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
-                Confirm
+    <Form {...form}>
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4 h-full">
+        {/* action bar — the editable name row IS the header (Jobs pattern) */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field }) => (
+              <FormItem className="flex-1 min-w-0 space-y-0">
+                <FormControl>
+                  <Input
+                    {...field}
+                    placeholder="Profile name"
+                    className="text-sm font-heading bg-secondary-background"
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <Button type="submit" size="sm" disabled={saving || deleting || !form.formState.isDirty}>
+            {saving ? <Loader2 className="size-3 animate-spin" /> : null}
+            Save
+          </Button>
+          {!isDefault && (
+            confirmDelete ? (
+              <>
+                <span className="text-xs opacity-70">Delete this profile?</span>
+                <Button type="button" size="sm" variant="neutral" onClick={() => void doDelete()} disabled={deleting}>
+                  {deleting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+                  Confirm
+                </Button>
+                <Button type="button" size="sm" variant="neutral" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button type="button" size="sm" variant="neutral" onClick={() => setConfirmDelete(true)} disabled={saving || deleting}>
+                <Trash2 className="size-3" />
               </Button>
-              <Button size="sm" variant="neutral" onClick={() => setConfirmDelete(false)} disabled={deleting}>
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" variant="neutral" onClick={() => setConfirmDelete(true)} disabled={saving || deleting}>
-              <Trash2 className="size-3" />
-            </Button>
-          )
-        )}
-        {isDefault && <span className="text-[10px] opacity-40">system default — cannot be deleted</span>}
-        {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-      </div>
+            )
+          )}
+          {isDefault && <span className="text-[10px] opacity-40">system default — cannot be deleted</span>}
+          {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+        </div>
 
-      {/* form sections */}
-      <div className="flex flex-col gap-3 overflow-y-auto flex-1 pr-1">
-        <Section title="General">
-          <SelectField label="Material" draftKey="material" draft={draft} onChange={onChange} options={MATERIAL_OPTIONS} />
-          <NumField label="Layer thickness" unit="mm" draftKey="layerThickness" draft={draft} onChange={onChange} min={0.05} max={1} step={0.01} />
-          <NumField label="Recoater passes" draftKey="recoaterPasses" draft={draft} onChange={onChange} integer min={1} max={10} step={1} />
-          <NumField label="Powder zone speed" unit="%" draftKey="recoaterPowderSpeedPercent" draft={draft} onChange={onChange} min={1} max={200} step={1} />
-          <NumField label="Print bed speed" unit="%" draftKey="recoaterPrintSpeedPercent" draft={draft} onChange={onChange} min={1} max={200} step={1} />
-        </Section>
-
-        <Section title="Heating">
-          <NumField label="Target: powder" unit="°C" draftKey="heatingTargetPowder" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Target: print" unit="°C" draftKey="heatingTargetPrint" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Target: print bed" unit="°C" draftKey="heatingTargetPrintBed" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Heating rate" draftKey="heatingRate" draft={draft} onChange={onChange} min={0} max={100} step={0.1} />
-          <NumField label="Heating threshold" unit="°C" draftKey="heatingThreshold" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Surface target" unit="°C" draftKey="surfaceTarget" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-        </Section>
-
-        <Section title="Layer Temperatures">
-          <NumField label="Begin layer target" unit="°C" draftKey="beginLayerTemperatureTarget" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <DelayField label="Begin layer delay" draftKey="beginLayerTemperatureDelay" draft={draft} onChange={onChange} />
-          <NumField label="Bed prep target" unit="°C" draftKey="bedPreparationTemperatureTarget" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <DelayField label="Bed prep delay" draftKey="bedPreparationTemperatureDelay" draft={draft} onChange={onChange} />
-          <NumField label="Bed prep thickness" unit="mm" draftKey="bedPreparationThickness" draft={draft} onChange={onChange} min={0} max={100} step={1} />
-          <NumField label="Print cap target" unit="°C" draftKey="printCapTemperatureTarget" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <DelayField label="Print cap delay" draftKey="printCapTemperatureDelay" draft={draft} onChange={onChange} />
-          <NumField label="Print cap thickness" unit="mm" draftKey="printCapThickness" draft={draft} onChange={onChange} min={0} max={100} step={1} />
-        </Section>
-
-        <Section title="Laser">
-          <NumField label="Laser on" unit="%" draftKey="laserOnPercent" draft={draft} onChange={onChange} min={0} max={100} step={0.5} />
-          <NumField label="Total energy" unit="%" draftKey="totalEnergyDensityPercent" draft={draft} onChange={onChange} min={1} max={500} step={1} />
-          <NumField label="First outline energy" draftKey="laserFirstOutlineEnergyDensity" draft={draft} onChange={onChange} min={0} max={100} step={0.5} />
-          <NumField label="Other outline energy" draftKey="laserOtherOutlineEnergyDensity" draft={draft} onChange={onChange} min={0} max={100} step={0.5} />
-          <NumField label="Fill energy" draftKey="laserFillEnergyDensity" draft={draft} onChange={onChange} min={0} max={100} step={0.5} />
-          <NumField label="Outline count" draftKey="outlineCount" draft={draft} onChange={onChange} integer min={0} max={20} step={1} />
-          <BoolField label="Fill enabled" draftKey="isFillEnabled" draft={draft} onChange={onChange} />
-        </Section>
-
-        <Section title="Cooling" defaultOpen={false}>
-          <NumField label="Cooling target" unit="°C" draftKey="coolingTarget" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Threshold 1" unit="°C" draftKey="coolingThreshold1" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Threshold 2" unit="°C" draftKey="coolingThreshold2" draft={draft} onChange={onChange} min={0} max={300} step={0.5} />
-          <NumField label="Rate 1" draftKey="coolingRate1" draft={draft} onChange={onChange} min={0} max={100} step={0.1} />
-          <NumField label="Rate 2" draftKey="coolingRate2" draft={draft} onChange={onChange} min={0} max={100} step={0.1} />
-        </Section>
-      </div>
-    </div>
+        {/* form sections */}
+        <div className="flex flex-col gap-3 overflow-y-auto flex-1 pr-1">
+          {SECTIONS.map((s) => (
+            <Section key={s.title} title={s.title} defaultOpen={s.defaultOpen ?? true}>
+              {s.fields.map(fieldRow)}
+            </Section>
+          ))}
+        </div>
+      </form>
+    </Form>
   );
 }
 
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export function PrintProfiles() {
-  const { list, listError, fetchProfile, createProfile, updateProfile, deleteProfile } =
+  const { list, listError, refresh, fetchProfile, createProfile, updateProfile, deleteProfile } =
     usePrintProfiles();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Selection lives in the route (/profiles/:id?) — same pattern as Jobs.
+  const { id } = useParams();
+  const selectedId = id ?? null;
+  const navigate = useNavigate();
+  const location = useLocation();
   const [profile, setProfile] = useState<PrintProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [detailTick, setDetailTick] = useState(0);
 
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [creating_busy, setCreatingBusy] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-
-  // Load profile when selection changes.
   useEffect(() => {
     if (!selectedId) { setProfile(null); return; }
     let cancelled = false;
     setProfileLoading(true);
     setProfileError(null);
     fetchProfile(selectedId)
-      .then((p) => { if (!cancelled) { setProfile(p); setProfileLoading(false); } })
+      .then((p) => {
+        if (cancelled) return;
+        setProfile(p);
+        setProfileLoading(false);
+        const st = location.state as { breadcrumb?: string } | null;
+        if (st?.breadcrumb !== (p.name ?? undefined)) {
+          navigate(location.pathname, { replace: true, state: { breadcrumb: p.name ?? undefined } });
+        }
+      })
       .catch((e: Error) => { if (!cancelled) { setProfileError(e.message); setProfileLoading(false); } });
-    return () => { cancelled = true; };
-  }, [selectedId, fetchProfile]);
+  // location/navigate deliberately omitted (crumb-sync replace would refetch)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, fetchProfile, detailTick]);
 
-  // Auto-select the default profile on first list load.
-  const listLoadedRef = useRef(false);
+  // Manual refresh with the Jobs page's full-rotation spinner.
+  const [spinning, setSpinning] = useState(false);
+  const spinStartRef = useRef(0);
+  const handleRefresh = useCallback(() => {
+    spinStartRef.current = performance.now();
+    setSpinning(true);
+    refresh();
+    setDetailTick((n) => n + 1);
+  }, [refresh]);
   useEffect(() => {
-    if (list && !listLoadedRef.current) {
-      listLoadedRef.current = true;
-      const def = list.find((p) => p.isDefault);
-      if (def) setSelectedId(def.id);
-    }
-  }, [list]);
+    if (!spinning) return;
+    const elapsed = performance.now() - spinStartRef.current;
+    const remaining = 1000 - (elapsed % 1000);
+    const t = setTimeout(() => setSpinning(false), remaining);
+    return () => clearTimeout(t);
+  }, [spinning]);
 
   const handleSave = useCallback(async (patch: Record<string, unknown>) => {
     if (!selectedId) return;
     const updated = await updateProfile(selectedId, patch);
     setProfile(updated);
-  }, [selectedId, updateProfile]);
+    navigate(`/profiles/${selectedId}`, { replace: true, state: { breadcrumb: updated.name ?? undefined } });
+  }, [selectedId, updateProfile, navigate]);
 
   const handleDelete = useCallback(async () => {
     if (!selectedId) return;
     await deleteProfile(selectedId);
-    setSelectedId(null);
     setProfile(null);
-  }, [selectedId, deleteProfile]);
+    navigate("/profiles");
+  }, [selectedId, deleteProfile, navigate]);
 
+  // Inline create row (opened from the breadcrumb action).
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const handleCreate = async () => {
     const name = newName.trim();
     if (!name) return;
-    setCreatingBusy(true);
+    setCreateBusy(true);
     setCreateError(null);
     try {
       const p = await createProfile(name);
       setNewName("");
       setCreating(false);
-      setSelectedId(p.id);
+      navigate(`/profiles/${p.id}`, { state: { breadcrumb: p.name ?? undefined } });
     } catch (e) {
       setCreateError((e as Error).message ?? String(e));
     } finally {
-      setCreatingBusy(false);
+      setCreateBusy(false);
     }
   };
+
+  // Sortable (name / date), paginated. The date is the profile file's mtime
+  // (modifiedAt) with the stored createdAt as fallback; defaults to newest
+  // first, undated profiles sort as oldest.
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(0);
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "date", dir: -1 });
+  const handleSort = (key: SortKey) => {
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: (s.dir * -1) as SortDir }
+        : { key, dir: key === "date" ? -1 : 1 },
+    );
+    setPage(0);
+  };
+  const dateOf = (p: { modifiedAt: string | null; createdAt: string | null }) =>
+    p.modifiedAt ?? p.createdAt;
+  const sorted = [...(list ?? [])].sort((a, b) => {
+    const cmp =
+      sort.key === "date"
+        ? (dateOf(a) ? new Date(dateOf(a)!).getTime() : 0) -
+          (dateOf(b) ? new Date(dateOf(b)!).getTime() : 0)
+        : a.name.localeCompare(b.name);
+    return cmp * sort.dir;
+  });
+  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = sorted.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
   const isDefault = !!list?.find((p) => p.id === selectedId)?.isDefault;
 
   return (
     <div className="p-4 flex flex-col gap-4 h-full">
-      <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0">
-        {/* ── profile list ── */}
-        <Card className="flex flex-col min-h-0">
-          {/* no "Profiles" title (breadcrumb covers it) — the header row
-              keeps only the new-profile action */}
-          <CardHeader>
-            <CardTitle className="flex items-center justify-end">
-              <Button
-                size="icon"
-                variant="neutral"
-                title="New profile"
-                onClick={() => { setCreating((v) => !v); setNewName(""); setCreateError(null); }}
-              >
-                <Plus className="size-3" />
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-1 overflow-y-auto flex-1 min-h-0">
-            {creating && (
-              <div className="flex flex-col gap-1 pb-2 border-b-2 border-border mb-1">
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="Profile name"
-                  value={newName}
-                  className={cn(inputCls, "w-full")}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleCreate();
-                    if (e.key === "Escape") { setCreating(false); setNewName(""); }
-                  }}
-                />
-                <div className="flex gap-1">
-                  <Button size="sm" onClick={() => void handleCreate()} disabled={creating_busy || !newName.trim()}>
-                    {creating_busy ? <Loader2 className="size-3 animate-spin" /> : null}
-                    Create
-                  </Button>
-                  <Button size="sm" variant="neutral" onClick={() => { setCreating(false); setNewName(""); }}>
-                    Cancel
-                  </Button>
-                </div>
-                {createError && <span className="text-[10px] text-red-600 dark:text-red-400">{createError}</span>}
+      <BreadcrumbActions>
+        <Button
+          variant="neutral"
+          size="sm"
+          title="New print profile"
+          onClick={() => { setCreating((v) => !v); setNewName(""); setCreateError(null); }}
+        >
+          <Plus className="size-3" />
+          New
+        </Button>
+        <Button
+          variant="neutral"
+          size="sm"
+          title="Refresh profiles from the printer"
+          onClick={handleRefresh}
+          disabled={spinning}
+        >
+          <RefreshCw className={cn("size-3", spinning && "animate-spin")} />
+          Refresh
+        </Button>
+      </BreadcrumbActions>
+
+      <div className="grid grid-cols-[300px_1fr] gap-4 flex-1 min-h-0">
+        {/* ── profile list — data-table sidebar (Jobs pattern) ── */}
+        <div className="flex flex-col min-h-0 gap-2">
+          {creating && (
+            <div className="flex flex-col gap-1 border-2 border-border rounded-base p-2">
+              <input
+                autoFocus
+                type="text"
+                placeholder="Profile name"
+                value={newName}
+                className={cn(inputCls, "w-full")}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleCreate();
+                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
+                }}
+              />
+              <div className="flex gap-1">
+                <Button size="sm" onClick={() => void handleCreate()} disabled={createBusy || !newName.trim()}>
+                  {createBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+                  Create
+                </Button>
+                <Button size="sm" variant="neutral" onClick={() => { setCreating(false); setNewName(""); }}>
+                  Cancel
+                </Button>
               </div>
-            )}
+              {createError && <span className="text-[10px] text-red-600 dark:text-red-400">{createError}</span>}
+            </div>
+          )}
 
-            {listError && <div className="text-xs text-red-600 dark:text-red-400">{listError}</div>}
-            {!list && !listError && <div className="text-xs opacity-50">loading…</div>}
+          {listError && <div className="text-xs text-red-600 dark:text-red-400">{listError}</div>}
+          {!list && !listError && <div className="text-xs opacity-50">loading…</div>}
+          {list?.length === 0 && <div className="text-xs opacity-50">No profiles on the printer.</div>}
 
-            {list?.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setSelectedId(p.id)}
-                className={cn(
-                  "text-left text-xs px-2 py-1.5 border-2 rounded-base transition-all",
-                  p.id === selectedId
-                    ? "border-border bg-main text-main-foreground shadow-shadow translate-x-0 translate-y-0"
-                    : "border-transparent hover:border-border hover:bg-secondary-background",
-                )}
-              >
-                <span className="font-heading">{p.name}</span>
-                {p.isDefault && (
-                  <span className="ml-1 text-[10px] opacity-60">default</span>
-                )}
-              </button>
-            ))}
-          </CardContent>
-        </Card>
+          {sorted.length > 0 && (
+            <div className="flex flex-col min-h-0 border-2 border-border [&>div]:min-h-0">
+              <Table className="table-fixed border-0">
+                <TableHeader className="sticky top-0 z-10">
+                  <TableRow>
+                    <SortHead label="Name" sortKey="name" sort={sort} onSort={handleSort} />
+                    <SortHead label="Modified" sortKey="date" sort={sort} onSort={handleSort} className="w-[92px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pageRows.map((p) => (
+                    <TableRow
+                      key={p.id}
+                      data-state={p.id === selectedId ? "selected" : undefined}
+                      onClick={() => navigate(`/profiles/${p.id}`, { state: { breadcrumb: p.name } })}
+                      className="cursor-pointer bg-background text-foreground hover:bg-secondary-background data-[state=selected]:bg-main data-[state=selected]:text-main-foreground"
+                    >
+                      <TableCell className="px-2 py-1.5 text-xs font-heading truncate" title={p.name}>
+                        {p.name}
+                        {p.isDefault && <span className="ml-1 text-[10px] font-base opacity-60">default</span>}
+                      </TableCell>
+                      <TableCell className="px-2 py-1.5 text-[10px] whitespace-nowrap">
+                        {dateOf(p) ? (
+                          <>
+                            <div>
+                              {new Date(dateOf(p)!).toLocaleDateString(undefined, {
+                                year: "numeric", month: "short", day: "numeric",
+                              })}
+                            </div>
+                            <div className="opacity-50">
+                              {new Date(dateOf(p)!).toLocaleTimeString(undefined, {
+                                hour: "2-digit", minute: "2-digit",
+                              })}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="opacity-40">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
 
-        {/* ── edit panel ── */}
+          {pageCount > 1 && (
+            <div className="mt-auto flex items-center gap-2 shrink-0">
+              <div className="text-xs opacity-60 mr-auto">
+                Page {safePage + 1} of {pageCount}
+              </div>
+              <Button variant="noShadow" size="sm" disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                Previous
+              </Button>
+              <Button variant="noShadow" size="sm" disabled={safePage >= pageCount - 1} onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}>
+                Next
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* ── detail panel ── */}
         <Card className="flex flex-col min-h-0">
-          <CardHeader>
-            <CardTitle>
-              {profile
-                ? (profile.name ?? "Untitled")
-                : selectedId
-                  ? "Loading…"
-                  : "Select a profile"}
-            </CardTitle>
-          </CardHeader>
+          {!(profile && !profileLoading) && (
+            <CardHeader>
+              <CardTitle>{selectedId ? "Loading…" : "Select a profile"}</CardTitle>
+            </CardHeader>
+          )}
           <CardContent className="flex-1 min-h-0 overflow-hidden">
             {profileLoading && (
               <div className="flex items-center gap-2 text-xs opacity-60">
@@ -519,11 +631,12 @@ export function PrintProfiles() {
             )}
             {!selectedId && (
               <div className="text-xs opacity-50">
-                Choose a profile from the list or create a new one.
+                Select a profile from the list, or create one with New in the
+                breadcrumb row. Empty fields inherit from the system Default.
               </div>
             )}
             {profile && !profileLoading && (
-              <EditForm
+              <ProfileForm
                 profile={profile}
                 isDefault={isDefault}
                 onSave={handleSave}

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Markdown } from "@/components/Markdown";
 import { sonarPing, pushNotify, requestNotifyPermission } from "@/lib/sonar";
 
 // Panel-mode console (wiki/Panel-Mode.md) — Mission Control's agent
@@ -168,11 +169,18 @@ export function PanelConsole() {
               </AlertDescription>
             </Alert>
           ) : (
-            <div key={i} className={cn("border-2 rounded px-2 py-1.5 whitespace-pre-wrap", ROLE_STYLE[m.role])}>
+            <div
+              key={i}
+              className={cn(
+                "border-2 rounded px-2 py-1.5",
+                m.role === "advisor" ? "" : "whitespace-pre-wrap",
+                ROLE_STYLE[m.role],
+              )}
+            >
               {ROLE_TAG[m.role] && (
                 <div className="text-[9px] uppercase tracking-wider opacity-50 mb-0.5">{ROLE_TAG[m.role]}</div>
               )}
-              {m.text}
+              {m.role === "advisor" ? <Markdown text={m.text} /> : m.text}
             </div>
           ),
         )}
@@ -202,7 +210,9 @@ export function PanelConsole() {
                       Select
                     </Button>
                   </div>
-                  <div className="p-2 whitespace-pre-wrap max-h-48 overflow-y-auto">{c.text}</div>
+                  <div className="p-2 max-h-48 overflow-y-auto">
+                    <Markdown text={c.text} />
+                  </div>
                 </div>
               ))}
             </div>
