@@ -87,6 +87,15 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
     }
     case "settings":
       return [{ label: "Settings" }];
+    // Research sidebar group (no landing page): Tests lives at /tests, other
+    // pages under /research/* — both crumb under a dimmed "Research" section.
+    case "tests":
+      return [{ label: "Research" }, { label: "Tests" }];
+    case "research": {
+      const out: Crumb[] = [{ label: "Research" }];
+      if (rest[0]) out.push({ label: rest[0][0].toUpperCase() + rest[0].slice(1) });
+      return out;
+    }
     default:
       return [{ label: pathname }];
   }

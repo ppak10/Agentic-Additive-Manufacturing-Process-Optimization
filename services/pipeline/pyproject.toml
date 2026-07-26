@@ -35,6 +35,7 @@ sls-backfill-frames = "agentic_sls.pipeline.backfill_frames:main"
 sls-export-labels = "agentic_sls.pipeline.export_labels:main"
 sls-backfill-camera-bboxes = "agentic_sls.pipeline.backfill_camera_bboxes:main"
 sls-analyze-build = "agentic_sls.pipeline.analyze_build:main"
+sls-import-telemetry = "agentic_sls.pipeline.import_telemetry:main"
 
 # The async task runner (agentic_sls/tasks/): FastAPI + single worker that runs
 # the sls-* jobs in the background, tracked in the Postgres `tasks` table.

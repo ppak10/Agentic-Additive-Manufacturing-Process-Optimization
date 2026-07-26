@@ -3,9 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "re
 import {
   MessageSquare,
   ChevronDown,
-  Factory,
+  Refrigerator,
   Plus,
-  Radar,
+  FlaskConical,
   Settings,
   Sun,
   Moon,
@@ -37,6 +37,7 @@ import { BuildLayout } from "@/pages/BuildLayout";
 import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
+import { AstmTests } from "@/pages/AstmTests";
 import { Tasks } from "@/pages/Tasks";
 import { PowderTuning } from "@/pages/PowderTuning";
 import { ServiceDetail } from "@/pages/Services";
@@ -52,14 +53,13 @@ import { RecordingStatusBanner } from "@/components/RecordingStatusBanner";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { ArtifactSplit, ArtifactProvider, useCurrentArtifacts, type Artifact } from "@/panels/ArtifactPanel";
 
-const NAV_GROUPS = [
-  {
-    label: "Live",
-    items: [
-      { to: "/mission", label: "Mission Control", icon: Radar, end: false },
-      // Triage moved to a per-build view (/builds/:id/triage) 2026-07-19
-    ],
-  },
+// Mission Control was removed from the sidebar 2026-07-19 (route still lives
+// at /mission); its top slot now holds the Research dropdown below.
+// "Research" — collapsible dropdown group (same neobrutalism submenu pattern
+// as Machine below). Rendered in Mission Control's old top slot.
+const RESEARCH_ITEMS = [
+  { to: "/tests", label: "Tests" },
+  { to: "/research/material", label: "Material" },
 ] as const;
 
 // "Machine" — collapsible dropdown group (neobrutalism sidebar submenu
@@ -124,6 +124,42 @@ function ConversationsNav() {
   );
 }
 
+function ResearchNav() {
+  const location = useLocation();
+  const anyActive = RESEARCH_ITEMS.some((i) => location.pathname.startsWith(i.to));
+  return (
+    <SidebarGroup className="border-b-0">
+      <SidebarMenu>
+        <Collapsible defaultOpen={anyActive} className="group/collapsible" asChild>
+          <SidebarMenuItem>
+            <CollapsibleTrigger asChild>
+              <SidebarMenuButton tooltip="Research" isActive={anyActive}>
+                <FlaskConical />
+                <span>Research</span>
+                <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+              </SidebarMenuButton>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarMenuSub>
+                {RESEARCH_ITEMS.map((item) => (
+                  <SidebarMenuSubItem key={item.to}>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={location.pathname.startsWith(item.to)}
+                    >
+                      <NavLink to={item.to}>{item.label}</NavLink>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </CollapsibleContent>
+          </SidebarMenuItem>
+        </Collapsible>
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+}
+
 function MachineNav() {
   const location = useLocation();
   const anyActive = MACHINE_ITEMS.some((i) => location.pathname.startsWith(i.to));
@@ -134,7 +170,7 @@ function MachineNav() {
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
               <SidebarMenuButton tooltip="Machine" isActive={anyActive}>
-                <Factory />
+                <Refrigerator />
                 <span>Machine</span>
                 <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
               </SidebarMenuButton>
@@ -166,31 +202,9 @@ function AppSidebar({ dark, onToggleDark }: { dark: boolean; onToggleDark: () =>
   return (
     <Sidebar collapsible="icon">
       <SidebarContent>
-        {NAV_GROUPS.map((group) => (
-          <React.Fragment key={group.label}>
-          <SidebarGroup className="border-b-0">
-            <SidebarMenu>
-              {group.items.map((item) => {
-                const isActive = item.end
-                  ? location.pathname === item.to
-                  : location.pathname.startsWith(item.to);
-                return (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton asChild tooltip={item.label} isActive={isActive}>
-                      <NavLink to={item.to} end={item.end}>
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroup>
-          </React.Fragment>
-        ))}
         {/* rendered explicitly — interleaving on group index broke when the
             group list shrank to one (the dropdown silently vanished) */}
+        <ResearchNav />
         <MachineNav />
         <ConversationsNav />
       </SidebarContent>
@@ -313,6 +327,18 @@ function AppShell() {
             <Route path="/tasks/:id?" element={<Tasks />} />
             <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
+            {/* Research — ASTM mechanical-test specimen browser */}
+            <Route path="/tests" element={<AstmTests />} />
+            {/* Research — placeholder pages (2026-07-19) */}
+            <Route
+              path="/research/material"
+              element={
+                <div className="p-6">
+                  <h1 className="text-2xl font-bold">Material</h1>
+                  <p className="mt-2 text-muted-foreground">Coming soon.</p>
+                </div>
+              }
+            />
             {/* legacy global triage path — now a per-build view under /builds */}
             <Route path="/labeling" element={<Navigate to="/builds" replace />} />
             <Route path="/conversations/:id" element={<ConversationPage />} />

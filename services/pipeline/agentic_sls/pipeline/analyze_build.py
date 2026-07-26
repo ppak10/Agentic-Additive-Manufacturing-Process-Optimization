@@ -214,8 +214,30 @@ def main() -> int:
             elif message and message.startswith("Layers →"):
                 t_end = ts
         if t_start is None:
-            print("no Layers phase found for this build", file=sys.stderr)
-            return 1
+            # Recorder joined mid-build: no "→ Layers" entry event was recorded.
+            # If we at least have the exit ("Layers → …"), derive the Layers
+            # start from the first z2 layer-step before it — z2 (the build
+            # piston) only steps during Layers, so its first step marks the real
+            # start and keeps heating/bed-prep frames out of the window.
+            if t_end is None:
+                print("no Layers phase found for this build", file=sys.stderr)
+                return 1
+            cur.execute(
+                """SELECT ts, value FROM telemetry
+                   WHERE build_id=%s AND kind='position.z2' AND ts <= %s
+                   ORDER BY ts""",
+                (args.build, t_end),
+            )
+            prev_v = None
+            for ts, value in cur.fetchall():
+                if prev_v is not None and value > prev_v:
+                    t_start = ts
+                    break
+                prev_v = value
+            if t_start is None:
+                print("no Layers phase found (no z2 steps before exit)", file=sys.stderr)
+                return 1
+            print(f"no '→ Layers' event; derived t_start from first z2 step: {t_start}")
 
         cur.execute(
             """SELECT ts, payload->'objects' FROM events

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { currentBuildId, isShuttingDown } from "./state.js";
+import { currentBuildId, isShuttingDown, isFramesRecording } from "./state.js";
 import { appendSpool } from "./spool.js";
 import type { FrameSpoolLine } from "./camera.js";
 
@@ -47,7 +47,7 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
     ws.on("close", (code, reason) => resolveDone(`code=${code} reason=${reason.toString()}`));
     ws.on("message", async (raw) => {
       const buildId = currentBuildId();
-      if (buildId === null) return; // not in a build; drop
+      if (buildId === null || !isFramesRecording()) return; // only during "Layers"
       if (isShuttingDown()) return;
       try {
         const frame = JSON.parse(raw.toString()) as BedMatrixFrame;

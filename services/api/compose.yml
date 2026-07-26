@@ -1,0 +1,37 @@
+# agentic-sls-api (:3400) — the GUI's lightweight backend: Postgres reads and
+# (in later phases) Inova plugin/firmware proxies. Peeled off the recorder so
+# that stateless GUI routes are NOT gated behind the recorder's restart
+# constraints (you can't restart the recorder mid-print). Stateless reader:
+# safe to restart anytime; it never touches recording or the live print.
+#
+# First boot runs `uv sync` (~30s) into the repo-local .api-venv (gitignored,
+# separate from the host .venv and the tasks .tasks-venv); it persists on the
+# bind mount across restarts. Code home is services/api/ (agentic_sls_api/).
+services:
+  api:
+    build: .
+    container_name: agentic-sls-api
+    restart: on-failure
+    network_mode: host
+    user: "1000:1000"
+    working_dir: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+    command: ["bash", "-lc", "uv sync --frozen && exec uv run --frozen sls-api-server"]
+    environment:
+      HOME: /tmp
+      DATABASE_URL: ${DATABASE_URL}
+      API_PORT: "3400"
+      # Upstreams for the plugin/firmware reverse proxies (host-networked, same
+      # reachability as the recorder). Pulled from .env; defaults match config.ts.
+      INOVA_API_BASE_URL: ${INOVA_API_BASE_URL:-http://192.168.1.146:5001}
+      INOVA_FIRMWARE_BASE_URL: ${INOVA_FIRMWARE_BASE_URL:-http://192.168.1.146}
+      UV_PROJECT_ENVIRONMENT: /mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization/.api-venv
+      UV_CACHE_DIR: /home/ppak/.agentic-sls/uv-cache
+    volumes:
+      - ../..:/mnt/storage2/GitHub/Agentic-Additive-Manufacturing-Process-Optimization
+      - /home/ppak/.agentic-sls:/home/ppak/.agentic-sls
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3400/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s

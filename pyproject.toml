@@ -3,7 +3,7 @@
 # services/pipeline/pyproject.toml. uv keeps the shared lockfile + venv here,
 # which is why `uv run sls-*` / `uv run pytest` work from the repo root.
 [tool.uv.workspace]
-members = ["services/pipeline"]
+members = ["services/pipeline", "services/api"]
 
 # Pytest scoping is orchestration: without this, root `uv run pytest`
 # crawls the entire repo (566 GB dataset submodules, unreadable postgres

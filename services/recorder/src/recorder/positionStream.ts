@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { currentBuildId, isShuttingDown } from "./state.js";
+import { currentBuildId, isShuttingDown, isFramesRecording } from "./state.js";
 import { appendSpool, noteFrame } from "./spool.js";
 
 export interface PositionFrame {
@@ -75,7 +75,7 @@ function runOnce(url: string, log: FastifyBaseLogger): Promise<string> {
       noteFrame("position");
 
       const buildId = currentBuildId();
-      if (buildId === null) return; // not in a build; skip spooling
+      if (buildId === null || !isFramesRecording()) return; // only during "Layers"
       if (isShuttingDown()) return;
       // Raw frame verbatim onto the NVMe spool — imported into position_hf
       // after the build ends. At ~1 kHz this stream is exactly the write

@@ -20,42 +20,102 @@ import { errorResult, jsonResult } from "../result.js";
 
 const MATERIALS = ["NotSet", "PA11", "PA12", "TPU", "Custom1", "Custom2", "Custom3", "Custom4", "Custom5"] as const;
 
-// Numeric fields with enforced bounds (mirror of the plugin's _bounds).
+// Numeric fields with enforced bounds. The full process-parameter surface so
+// the agent can reason over every knob when matching a material TDS. Bounds are
+// informed by observed values across the printer's stored profiles; keep the
+// plugin's _bounds (PrintProfileEndpoints.cs) in sync — fields not yet in _bounds
+// are passed through unclamped by the plugin until it is redeployed.
 const NUM_FIELDS: { key: string; unit?: string; min: number; max: number }[] = [
+  // ── recoater ──
   // Thickness fields are MICROMETERS (live data: layer 100, bedPrep 13000)
   { key: "layerThickness", unit: "µm", min: 50, max: 300 },
   { key: "recoaterPasses", min: 1, max: 10 },
   { key: "recoaterPowderSpeedPercent", unit: "%", min: 1, max: 200 },
   { key: "recoaterPrintSpeedPercent", unit: "%", min: 1, max: 200 },
+  { key: "recoaterShakePercent", unit: "%", min: 0, max: 100 },
+  { key: "recoaterMaxDistance", unit: "mm", min: 0, max: 1000 },
+  { key: "addPowderDepth", unit: "µm", min: 0, max: 50000 },
+  { key: "powderVolumePercent", unit: "%", min: 0, max: 500 },
+  { key: "zMove", min: 0, max: 5000 },
+  // ── heating ──
   { key: "heatingTargetPowder", unit: "°C", min: 0, max: 200 },
   { key: "heatingTargetPrint", unit: "°C", min: 0, max: 200 },
   { key: "heatingTargetPrintBed", unit: "°C", min: 0, max: 200 },
+  { key: "heatingTargetPrintBed2", unit: "°C", min: 0, max: 200 },
+  { key: "heatingTargetPrintBed2Thickness1", unit: "µm", min: 0, max: 50000 },
+  { key: "heatingTargetPrintBed2Thickness2", unit: "µm", min: 0, max: 50000 },
+  { key: "heatingTargetAnalyse", unit: "°C", min: 0, max: 200 },
   { key: "heatingRate", min: 0, max: 100 },
   { key: "heatingThreshold", unit: "°C", min: 0, max: 200 },
+  { key: "heatingLayerStartTemperature", unit: "°C", min: 0, max: 200 },
+  { key: "heatingLayerEndTemperature", unit: "°C", min: 0, max: 200 },
+  { key: "halogenMaxPercent", unit: "%", min: 0, max: 100 },
   { key: "surfaceTarget", unit: "°C", min: 0, max: 200 },
+  { key: "surfaceTarget2", unit: "°C", min: 0, max: 200 },
+  { key: "surfaceHeatingRate", min: 0, max: 100 },
+  // ── layer / bed preparation ──
   { key: "beginLayerTemperatureTarget", unit: "°C", min: 0, max: 200 },
   { key: "bedPreparationTemperatureTarget", unit: "°C", min: 0, max: 200 },
   { key: "bedPreparationThickness", unit: "µm", min: 0, max: 50000 },
+  { key: "bedPreparationTemperatureIncreaseFromPercent", unit: "%", min: 0, max: 100 },
+  { key: "bedPreparationTemperatureIncreaseToPercent", unit: "%", min: 0, max: 100 },
+  { key: "bedPreparationFirstExtraThickLayerCount", min: 0, max: 100 },
+  { key: "bedPreparationFirstExtraThicknessMultiplier", min: 0, max: 10 },
   { key: "printCapTemperatureTarget", unit: "°C", min: 0, max: 200 },
   { key: "printCapThickness", unit: "µm", min: 0, max: 50000 },
+  // ── laser / energy / sintering ──
   { key: "laserOnPercent", unit: "%", min: 0, max: 100 },
   { key: "totalEnergyDensityPercent", unit: "%", min: 1, max: 500 },
+  { key: "totalIncreasedEnergyDensityPercent", unit: "%", min: 0, max: 500 },
   { key: "laserFirstOutlineEnergyDensity", min: 0, max: 100 },
   { key: "laserOtherOutlineEnergyDensity", min: 0, max: 100 },
   { key: "laserFillEnergyDensity", min: 0, max: 100 },
   { key: "outlineCount", min: 0, max: 20 },
+  { key: "outlinePowerIncrease", min: 0, max: 100 },
+  { key: "outlinePowerPrecision", min: 0, max: 100 },
+  { key: "fillOutlineSkipCount", min: 0, max: 20 },
+  { key: "hotspotOverlapPercent", unit: "%", min: 0, max: 100 },
+  { key: "sinteredVolumeFactor", min: 0, max: 10 },
+  { key: "customSinteredVolumePercent", unit: "%", min: 0, max: 500 },
+  // ── cooling ──
   { key: "coolingTarget", unit: "°C", min: 0, max: 200 },
   { key: "coolingThreshold1", unit: "°C", min: 0, max: 200 },
   { key: "coolingThreshold2", unit: "°C", min: 0, max: 200 },
   { key: "coolingRate1", min: 0, max: 100 },
   { key: "coolingRate2", min: 0, max: 100 },
+  { key: "coolingTimePercent", unit: "%", min: 0, max: 100 },
+  // ── auto-tuning ──
+  { key: "autoTuningExpectedDetectionTemperature", unit: "°C", min: 0, max: 200 },
+  { key: "autoTuningMaxTemperature", unit: "°C", min: 0, max: 200 },
+  { key: "autoTuningTemperatureOffset", unit: "°C", min: -50, max: 50 },
+  { key: "autoTuningTemperatureStep", unit: "°C", min: 0, max: 50 },
+  { key: "autoTuningThresholdPercent", unit: "%", min: 0, max: 100 },
+  { key: "autoTuningLayerThicknessMultiplier", min: 0, max: 10 },
 ];
 
-// TimeSpan-string fields, surfaced to the model as SECONDS.
-const DELAY_FIELDS = [
-  "beginLayerTemperatureDelay",
-  "bedPreparationTemperatureDelay",
-  "printCapTemperatureDelay",
+// TimeSpan-string fields, surfaced to the model as SECONDS. Per-field max since
+// the *MinimumTime / *Time knobs run to hours where the delays are seconds.
+const DELAY_FIELDS: { key: string; max: number }[] = [
+  { key: "beginLayerTemperatureDelay", max: 3600 },
+  { key: "bedPreparationTemperatureDelay", max: 3600 },
+  { key: "printCapTemperatureDelay", max: 3600 },
+  { key: "layerExtendDelay", max: 3600 },
+  { key: "heatingLayerPeriod", max: 3600 },
+  { key: "heatingMinimumTime", max: 86400 },
+  { key: "coolingMinimumTime", max: 86400 },
+  { key: "surfaceTarget2Time", max: 86400 },
+];
+const DELAY_KEYS = new Set(DELAY_FIELDS.map((f) => f.key));
+
+// Boolean toggles.
+const BOOL_FIELDS = [
+  "isFillEnabled",
+  "isAutoHeatingEnabled",
+  "isAutoCoolingEnabled",
+  "bedPreparationTemperatureIncrease",
+  "coolingHeatHold",
+  "autoTuningEnabled",
+  "useSoftHeater",
 ];
 
 // "5" seconds → "00:00:05"; "00:00:05.000" → 5
@@ -74,21 +134,28 @@ function timeSpanToSeconds(s: unknown): number | null {
   return isFinite(total) ? total : null;
 }
 
-// Strict fields schema: every key enumerated with its bounds in the
-// description; null reverts the field to inheriting the Default.
+// Strict fields schema: every settable key enumerated with its bounds in the
+// description; null reverts the field to inheriting the Default. Fixed machine
+// geometry (printable*/cutCorner*/projection), UI-state (*Collapsed), and the
+// complex nested/array fields (shrinkageCorrectionStandard, laserOutlineEnergy-
+// Densities, softHeaterFilename) are intentionally NOT settable here — they are
+// still visible read-only via profile_get.
 const fieldsShape: Record<string, z.ZodType> = Object.fromEntries([
   ...NUM_FIELDS.map((f) => [
     f.key,
     z.number().min(f.min).max(f.max).nullable().optional()
       .describe(`${f.unit ? `${f.unit}, ` : ""}range [${f.min}..${f.max}]; null = inherit Default`),
   ]),
-  ...DELAY_FIELDS.map((k) => [
-    k,
-    z.number().min(0).max(3600).nullable().optional()
-      .describe("seconds, range [0..3600]; null = inherit Default"),
+  ...DELAY_FIELDS.map((f) => [
+    f.key,
+    z.number().min(0).max(f.max).nullable().optional()
+      .describe(`seconds, range [0..${f.max}]; null = inherit Default`),
   ]),
   ["material", z.enum(MATERIALS).nullable().optional().describe("null = inherit Default")],
-  ["isFillEnabled", z.boolean().nullable().optional().describe("null = inherit Default")],
+  ...BOOL_FIELDS.map((k) => [
+    k,
+    z.boolean().nullable().optional().describe("null = inherit Default"),
+  ]),
 ]);
 
 // fields (tool shape, delays in seconds) → PUT/POST body (TimeSpan strings)
@@ -96,23 +163,22 @@ function toBody(fields: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue;
-    out[k] = DELAY_FIELDS.includes(k) && typeof v === "number" ? secondsToTimeSpan(v) : v;
+    out[k] = DELAY_KEYS.has(k) && typeof v === "number" ? secondsToTimeSpan(v) : v;
   }
   return out;
 }
 
-// Raw profile JSON → surfaced projection (delays back to seconds; the
-// ~250 KB stats blob and other internals dropped).
+// Raw profile JSON → surfaced projection. COMPREHENSIVE: every real field is
+// surfaced so the agent can reason over the full profile — only the ~250 KB
+// `stats` blob and the UI-state *Collapsed flags are dropped. TimeSpan fields
+// are converted to seconds under a …Seconds key.
 function project(p: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    id: p.id,
-    name: p.name,
-    createdAt: p.createdAt ?? null,
-    material: p.material ?? null,
-    isFillEnabled: p.isFillEnabled ?? null,
-  };
-  for (const f of NUM_FIELDS) out[f.key] = p[f.key] ?? null;
-  for (const k of DELAY_FIELDS) out[`${k}Seconds`] = timeSpanToSeconds(p[k]);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (k === "stats" || k.endsWith("Collapsed")) continue;
+    if (DELAY_KEYS.has(k)) out[`${k}Seconds`] = timeSpanToSeconds(v);
+    else out[k] = v;
+  }
   return out;
 }
 

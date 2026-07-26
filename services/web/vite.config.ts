@@ -22,6 +22,20 @@ export default defineConfig({
       // Task runner (services/pipeline/agentic_sls/tasks, :3300) — MUST precede
       // the generic /api → recorder entry (first prefix match wins).
       "/api/tasks": { target: "http://localhost:3300" },
+      // GUI API service (services/api, :3400) — stateless Postgres/Inova reads
+      // migrating off the recorder. Each moved route gets its own prefix here,
+      // ahead of the generic /api → recorder fallback (first prefix match wins).
+      "/api/astm": { target: "http://localhost:3400" },
+      "/api/registry": { target: "http://localhost:3400" },
+      "/api/datasets/summary": { target: "http://localhost:3400" },
+      "/api/calibration": { target: "http://localhost:3400" },
+      // firmware/plugin proxies (phase 3). NB: /api/camera/*/stream WS entries
+      // are listed above and win over /api/camera (first prefix match).
+      "/api/info": { target: "http://localhost:3400" },
+      "/api/camera": { target: "http://localhost:3400" },
+      "/api/profiles": { target: "http://localhost:3400" },
+      "/api/jobs": { target: "http://localhost:3400" },
+      "/api/powder-tuning": { target: "http://localhost:3400" },
       "/api": { target: "http://localhost:3000" },
       "/healthz": { target: "http://localhost:3000" },
       // Agent session broker (harness/server.ts) — separate process from

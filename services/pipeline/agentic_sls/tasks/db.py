@@ -128,6 +128,20 @@ def cancel_task(task_id: int) -> Optional[dict]:
         ).fetchone()
 
 
+def reconcile_orphans() -> int:
+    """Fail tasks stuck in 'running' from a prior crash/restart. The worker is
+    single + sequential, so at startup nothing is legitimately running — any
+    'running' row is an interrupted job (e.g. the container was recreated to
+    load new code). Returns how many were reconciled."""
+    with connect() as conn:
+        rows = conn.execute(
+            "UPDATE tasks SET status = 'failed', ended_at = now(), "
+            "error = COALESCE(error || ' | ', '') || 'interrupted — task service restarted' "
+            "WHERE status = 'running' RETURNING id"
+        ).fetchall()
+    return len(rows)
+
+
 def insert_event(build_id: Optional[int], kind: str, message: str,
                  payload: dict[str, Any]) -> None:
     with connect() as conn:

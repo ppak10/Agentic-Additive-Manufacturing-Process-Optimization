@@ -86,6 +86,9 @@ def run_task(task: dict) -> None:
 
 def worker_loop(stop: threading.Event) -> None:
     db.ensure_schema()
+    orphaned = db.reconcile_orphans()
+    if orphaned:
+        print(f"reconciled {orphaned} orphaned running task(s) from a prior restart")
     while not stop.is_set():
         try:
             task = db.claim_next()

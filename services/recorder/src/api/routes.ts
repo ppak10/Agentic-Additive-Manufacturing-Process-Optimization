@@ -16,7 +16,6 @@ import { addPositionSubscriber, removePositionSubscriber } from "../recorder/pos
 import { isUpstreamOpen, tripUpstream } from "../recorder/upstreamBreaker.js";
 import { currentMemorySample } from "../recorder/memory.js";
 import { registerHealthRoutes } from "./health.js";
-import { registerKnowledgeRoutes } from "./knowledge.js";
 import {
   cancelStopAfterBuild,
   requestStopAfterBuild,
@@ -61,9 +60,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // defeat the point of an independent check.
   registerHealthRoutes(app);
 
-  // Build registry + summaries + ASTM for the GUI Builds page (reads the
-  // knowledge tables created by sls-sync-reference).
-  await registerKnowledgeRoutes(app);
+  // Registry / build-card / ASTM reads moved to the GUI API service
+  // (services/api, :3400) 2026-07-19 — recorder→api phase 2.
 
   // Maintenance: ask the recorder to exit cleanly (code 0 — supervisor and
   // systemd both leave it stopped) once the current build has finalized and
@@ -78,20 +76,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
   app.get("/api/admin/stop-after-build", async () => stopAfterBuildStatus());
 
-  app.get("/api/info", async (_req, reply) => {
-    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
-      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
-    }
-    try {
-      const r = await fetch(`${config.INOVA_API_BASE_URL}/info`);
-      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-      return await r.json();
-    } catch (err) {
-      tripUpstream(config.INOVA_API_BASE_URL);
-      const msg = (err as Error)?.message ?? String(err);
-      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
-    }
-  });
+  // /api/info moved to the GUI API service (services/api, :3400) — phase 3.
 
   app.get("/api/summary", async () => {
     const { rows } = await pool.query<{
@@ -279,94 +264,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Camera proxy with circuit breaker on the firmware host. During an outage
-  // the browser keeps polling at ~24fps × 3 image kinds; without the breaker
-  // each poll spawned a fresh socket + threw a TypeError carrying a full
-  // multi-line stack which Fastify logged in full, accumulating heap pressure.
-  // Now we trip per-host for 2s on any failure and short-circuit subsequent
-  // requests so the cost of an outage is bounded.
-  const cameraProxy = (path: string, mime: string) => async (_req: unknown, reply: any) => {
-    if (isUpstreamOpen(config.INOVA_FIRMWARE_BASE_URL)) {
-      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
-    }
-    const url = `${config.INOVA_FIRMWARE_BASE_URL}${path}${randomUUID()}`;
-    try {
-      const r = await fetch(url);
-      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-      return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
-    } catch (err) {
-      tripUpstream(config.INOVA_FIRMWARE_BASE_URL);
-      // Log only the short message — full err includes a multi-line stack
-      // string that wedges the log buffer during sustained outages.
-      const msg = (err as Error)?.message ?? String(err);
-      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
-    }
-  };
-
-  // Per-dataset stats for the GUI's Datasets pages. Big tables (telemetry,
-  // frames, position_hf, agent_messages) use pg_class reltuples ESTIMATES —
-  // exact count(*) over telemetry takes minutes and once wedged the old
-  // /api/summary consumer. Small tables get exact counts.
-  app.get("/api/datasets/summary", async () => {
-    const est = async (table: string): Promise<number> => {
-      const { rows } = await pool.query(
-        `SELECT reltuples::bigint AS n FROM pg_class WHERE relname = $1`, [table],
-      );
-      return Math.max(0, Number(rows[0]?.n ?? 0));
-    };
-    const exact = async (table: string): Promise<number> => {
-      const { rows } = await pool.query(`SELECT count(*) AS n FROM ${table}`);
-      return Number(rows[0]?.n ?? 0);
-    };
-    const [builds, events, ticksEst, framesEst, positionEst,
-           jobs, profiles, printSessions, specimens,
-           conversations, sessions, selections, messagesEst, convBuilds] =
-      await Promise.all([
-        exact("builds"), exact("events"), est("telemetry"), est("frames"), est("position_hf"),
-        exact("inova_jobs"), exact("inova_print_profiles"), exact("inova_print_sessions"),
-        exact("astm_specimens"),
-        exact("agent_conversations"), exact("agent_sessions"), exact("agent_selections"),
-        est("agent_messages"), exact("conversation_builds"),
-      ]);
-    return {
-      telemetry: { builds, events, ticks_est: ticksEst, frames_est: framesEst, position_est: positionEst },
-      database: { jobs, profiles, print_sessions: printSessions },
-      astm: { specimens },
-      conversations: { conversations, sessions, selections, messages_est: messagesEst, conversation_builds: convBuilds },
-    };
-  });
-
-  // Operator calibrations (append-only; latest per kind wins). The web's
-  // Align mode POSTs here; feedback.ts reads the same rows for the
-  // build_layout/camera_bboxes projection. GET returns the current row.
-  app.get<{ Params: { kind: string } }>("/api/calibration/:kind", async (req, reply) => {
-    const { rows } = await pool.query(
-      `SELECT id, kind, payload, source, note, created_at FROM calibrations
-       WHERE kind = $1 ORDER BY id DESC LIMIT 1`,
-      [req.params.kind],
-    );
-    if (rows.length === 0) return reply.code(404).send({ error: "no calibration recorded" });
-    return rows[0];
-  });
-  app.post<{ Params: { kind: string }; Body: { payload?: unknown; source?: string; note?: string } }>(
-    "/api/calibration/:kind",
-    async (req, reply) => {
-      if (!req.body?.payload || typeof req.body.payload !== "object") {
-        return reply.code(400).send({ error: "body.payload (object) required" });
-      }
-      const { rows } = await pool.query(
-        `INSERT INTO calibrations (kind, payload, source, note)
-         VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-        [req.params.kind, JSON.stringify(req.body.payload),
-         req.body.source ?? null, req.body.note ?? null],
-      );
-      return rows[0];
-    },
-  );
-
-  app.get("/api/camera/chamber.jpg", cameraProxy("/api/videocamera/image/", "image/jpeg"));
-  app.get("/api/camera/thermal.gif", cameraProxy("/api/bedmatrix/image/", "image/gif"));
-  app.get("/api/camera/galvo.png", cameraProxy("/api/plottedimage/", "image/png"));
+  // /api/datasets/summary and /api/calibration/:kind moved to the GUI API
+  // service (services/api, :3400) 2026-07-19 — recorder→api phase 2. The
+  // recorder's feedback.ts still reads the calibrations table directly (SQL
+  // poll), so it is unaffected by the HTTP route moving.
+  //
+  // /api/camera/{chamber.jpg,thermal.gif,galvo.png} (firmware image proxy)
+  // moved to the API service — phase 3. The camera/bedmatrix/position *WebSocket*
+  // proxies below stay: they are live-stream fan-outs tied to this process.
 
   app.get("/api/stream", { websocket: true }, (socket) => {
     const interval = setInterval(() => {
@@ -695,150 +600,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Print profile CRUD — thin proxy to the plugin's /profiles/* routes.
-  // Profiles are bare JSON (no {respondedAt,data} envelope); status codes
-  // pass through: 200/201/204 for success, 400 for bad input, 404 not found.
-  //
-  // Generic helper: forward method + body to the plugin and relay the reply.
-  // Keyed on the plugin circuit breaker, same as the other plugin routes.
-  const pluginProxy = async (
-    method: string,
-    path: string,
-    body: unknown,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    reply: any,
-  ): Promise<unknown> => {
-    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
-      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
-    }
-    try {
-      const opts: RequestInit = { method };
-      if (body !== undefined && method !== "DELETE" && method !== "GET") {
-        opts.headers = { "content-type": "application/json" };
-        opts.body = JSON.stringify(body);
-      }
-      const r = await fetch(`${config.INOVA_API_BASE_URL}${path}`, opts);
-      if (r.status === 204) return reply.code(204).send();
-      const payload: unknown = await r.json().catch(() => ({ status: r.status }));
-      // Surface 400/404 to the client directly; everything else non-2xx → 502.
-      const code = r.ok
-        ? r.status
-        : r.status === 400 || r.status === 404
-          ? r.status
-          : 502;
-      return reply.code(code).send(payload);
-    } catch (err) {
-      tripUpstream(config.INOVA_API_BASE_URL);
-      const msg = (err as Error)?.message ?? String(err);
-      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
-    }
-  };
-
-  app.get("/api/profiles", (_req, reply) =>
-    pluginProxy("GET", "/profiles", undefined, reply),
-  );
-
-  app.get<{ Params: { id: string }; Querystring: { merged?: string } }>(
-    "/api/profiles/:id",
-    (req, reply) => {
-      const qs = req.query.merged === "true" ? "?merged=true" : "";
-      return pluginProxy("GET", `/profiles/${encodeURIComponent(req.params.id)}${qs}`, undefined, reply);
-    },
-  );
-
-  app.post<{ Body: Record<string, unknown> }>("/api/profiles", (req, reply) =>
-    pluginProxy("POST", "/profiles", req.body, reply),
-  );
-
-  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
-    "/api/profiles/:id",
-    (req, reply) =>
-      pluginProxy("PUT", `/profiles/${encodeURIComponent(req.params.id)}`, req.body, reply),
-  );
-
-  app.delete<{ Params: { id: string } }>("/api/profiles/:id", (req, reply) =>
-    pluginProxy("DELETE", `/profiles/${encodeURIComponent(req.params.id)}`, undefined, reply),
-  );
-
-  // Powder tuning session commands — thin proxies to the plugin's /powder-tuning/* routes.
-  // The session must be started from the firmware wizard; these endpoints control it once running.
-  app.get("/api/powder-tuning/status", (_req, reply) =>
-    pluginProxy("GET", "/powder-tuning/status", undefined, reply));
-  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/layer", (req, reply) =>
-    pluginProxy("POST", "/powder-tuning/layer", req.body, reply));
-  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/bed-level", (req, reply) =>
-    pluginProxy("POST", "/powder-tuning/bed-level", req.body, reply));
-  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/surface", (req, reply) =>
-    pluginProxy("POST", "/powder-tuning/surface", req.body, reply));
-  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/params", (req, reply) =>
-    pluginProxy("POST", "/powder-tuning/params", req.body, reply));
-  app.get("/api/powder-tuning/print/setup", (_req, reply) =>
-    pluginProxy("GET", "/powder-tuning/print/setup", undefined, reply));
-  app.post<{ Body: Record<string, unknown> }>("/api/powder-tuning/print", (req, reply) =>
-    pluginProxy("POST", "/powder-tuning/print", req.body, reply));
-  app.post("/api/powder-tuning/stop", (_req, reply) =>
-    pluginProxy("POST", "/powder-tuning/stop", undefined, reply));
-
-  // Job CRUD — thin proxy to the plugin's /jobs/* routes. Same circuit-breaker
-  // key as the other plugin routes. Jobs are bare JSON (no {respondedAt,data}
-  // envelope). PATCH /jobs/:id accepts { name?, printProfileId? }.
-  app.get("/api/jobs", (_req, reply) =>
-    pluginProxy("GET", "/jobs", undefined, reply),
-  );
-
-  app.get<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
-    pluginProxy("GET", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
-  );
-
-  app.patch<{ Params: { id: string }; Body: { name?: string; printProfileId?: string } }>(
-    "/api/jobs/:id",
-    (req, reply) =>
-      pluginProxy("PATCH", `/jobs/${encodeURIComponent(req.params.id)}`, req.body, reply),
-  );
-
-  app.delete<{ Params: { id: string } }>("/api/jobs/:id", (req, reply) =>
-    pluginProxy("DELETE", `/jobs/${encodeURIComponent(req.params.id)}`, undefined, reply),
-  );
-
-  // Clone a stored job (plugin runs the firmware's CloneJob), optionally
-  // re-pointing the print profile. Body: { name, printProfileId? }.
-  app.post<{ Params: { id: string }; Body: { name?: string; printProfileId?: string } }>(
-    "/api/jobs/:id/clone",
-    (req, reply) =>
-      pluginProxy("POST", `/jobs/${encodeURIComponent(req.params.id)}/clone`, req.body, reply),
-  );
-
-  // Stored-job nesting instances (chamber + per-instance transforms) — the
-  // off-print counterpart of /api/job/current/parts. Bare JSON like the other
-  // /jobs routes.
-  app.get<{ Params: { id: string } }>("/api/jobs/:id/instances", (req, reply) =>
-    pluginProxy("GET", `/jobs/${encodeURIComponent(req.params.id)}/instances`, undefined, reply),
-  );
-
-  // Stored-job mesh blob by content hash. Byte-passthrough like
-  // /api/printing/meshes/:hash — the browser hands the ArrayBuffer straight
-  // to Three.js.
-  app.get<{ Params: { id: string; hash: string } }>(
-    "/api/jobs/:id/meshes/:hash",
-    async (req, reply) => {
-      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
-        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
-      }
-      try {
-        const r = await fetch(
-          `${config.INOVA_API_BASE_URL}/jobs/${encodeURIComponent(req.params.id)}/meshes/${encodeURIComponent(req.params.hash)}`,
-        );
-        if (r.status === 404 || r.status === 422) {
-          return reply.code(r.status).send(await r.json().catch(() => ({ error: "upstream" })));
-        }
-        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
-        const mime = r.headers.get("content-type") ?? "application/octet-stream";
-        return reply.type(mime).send(Buffer.from(await r.arrayBuffer()));
-      } catch (err) {
-        tripUpstream(config.INOVA_API_BASE_URL);
-        const msg = (err as Error)?.message ?? String(err);
-        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
-      }
-    },
-  );
+  // Job / profile / powder-tuning CRUD proxies moved to the GUI API service
+  // (services/api, :3400) 2026-07-20 — recorder→api phase 3. The mid-print
+  // OVERRIDE proxies above (recoater-passes / layer-overrides / setup-overrides /
+  // object exclude) stay: they log operator_action via feedback.ts (live
+  // recording state), so they belong with the recorder.
 }

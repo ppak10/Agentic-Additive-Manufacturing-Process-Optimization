@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { currentBuildId, isShuttingDown } from "./state.js";
+import { currentBuildId, isShuttingDown, isFramesRecording } from "./state.js";
 import { isUpstreamOpen, tripUpstream } from "./upstreamBreaker.js";
 import { appendSpool } from "./spool.js";
 
@@ -116,7 +116,7 @@ function runChamberOnce(url: string, log: FastifyBaseLogger): Promise<string> {
     ws.on("close", (code, reason) => resolveDone(`code=${code} reason=${reason.toString()}`));
     ws.on("message", async (raw) => {
       const buildId = currentBuildId();
-      if (buildId === null) return; // not in a build; drop frame
+      if (buildId === null || !isFramesRecording()) return; // only during "Layers"
       if (isShuttingDown()) return;
       try {
         const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
@@ -146,7 +146,7 @@ export function startCameraRecorder(log: FastifyBaseLogger): void {
       let nextAt = Date.now();
       while (true) {
         const buildId = currentBuildId();
-        if (buildId !== null) {
+        if (buildId !== null && isFramesRecording()) {
           await captureOne(source, buildId, log);
         }
         const period = 1000 / source.hz;

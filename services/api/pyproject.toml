@@ -1,0 +1,32 @@
+[project]
+name = "agentic-sls-api"
+version = "0.0.1"
+description = "Lightweight read/proxy API for the Agentic SLS GUI (Postgres + Inova)."
+readme = "README.md"
+requires-python = ">=3.12"
+# Deliberately minimal — this service only reads Postgres and (later) proxies
+# the Inova plugin. It does NOT depend on the pipeline's scientific stack
+# (polars/opencv/pyarrow); keeping the dep set small keeps the image light.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "psycopg[binary,pool]>=3.3.4",
+    "python-dotenv>=1.2.2",
+    "httpx>=0.27",
+]
+
+# The GUI API server (agentic_sls_api/): FastAPI app served by the
+# agentic-sls-api docker service. Console script mirrors sls-task-server.
+[project.scripts]
+sls-api-server = "agentic_sls_api.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentic_sls_api*"]

@@ -1,7 +1,10 @@
 import type { FastifyBaseLogger } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { setCurrentBuildId, isShuttingDown } from "./state.js";
+import { setCurrentBuildId, isShuttingDown, setFramesRecording } from "./state.js";
+
+// The one firmware phase during which frames + position are worth spooling.
+const PRINTING_PHASE = "Layers";
 import { enqueueImport } from "./importer.js";
 import { maybeStopAfterBuild } from "./lifecycle.js";
 
@@ -198,6 +201,10 @@ export function startJobDetector(log: FastifyBaseLogger): void {
           unreachableSince = null;
         }
       }
+
+      // Gate the heavy frame/position spool on the printing phase. False the
+      // instant the firmware goes unreachable (ps null) or leaves "Layers".
+      setFramesRecording(currentId !== null && ps?.phase === PRINTING_PHASE);
 
       if (currentId === null) maybeStopAfterBuild(log);
       await new Promise((r) => setTimeout(r, 500));

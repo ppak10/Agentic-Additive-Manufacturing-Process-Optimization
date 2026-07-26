@@ -1,0 +1,15 @@
+# agentic-sls-api — lightweight GUI read/proxy API (FastAPI + uvicorn). The
+# repo is bind-mounted at runtime (see compose.yml); the workspace venv is
+# built on boot via `uv sync` into UV_PROJECT_ENVIRONMENT (a repo-local,
+# gitignored .api-venv, separate from the host .venv and the tasks .tasks-venv).
+# curl covers the healthcheck. Safe to restart anytime — this service is a
+# stateless reader; it never touches recording or the live print.
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy mode: the venv lives on a bind mount, cache elsewhere — hardlinks across
+# filesystems fail, so copy instead (avoids noisy warnings / errors).
+ENV UV_LINK_MODE=copy

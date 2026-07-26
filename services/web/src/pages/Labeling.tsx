@@ -114,7 +114,7 @@ export function Labeling() {
     setFlash(null);
     if (!current) return;
     let cancelled = false;
-    void fetch(`/defect/frames/context?frame_id=${current.frameId}&span=10`)
+    void fetch(`/defect/frames/context?frame_id=${current.frameId}&span=25`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!cancelled && d?.ids) setCtx(d);
@@ -193,9 +193,17 @@ export function Labeling() {
           build_id: current.buildId,
           layer: current.layer,
           ts: current.ts,
-          // attach to the frame actually being SHOWN — the operator may
-          // have scrubbed context to where the defect is clearest
-          frame_ids: [shownFrameId],
+          // Persist the label across a ±25-frame window centered on the frame
+          // being SHOWN (the operator scrubs to where the defect is clearest).
+          // A real defect carries over several consecutive frames, so the label
+          // should too — not just the one frame. Falls back to the single shown
+          // frame if the context window hasn't loaded.
+          frame_ids: ctx
+            ? ctx.ids.slice(
+                Math.max(0, ctx.center + offset - 25),
+                ctx.center + offset + 26,
+              )
+            : [shownFrameId],
           class: pickClass,
           bbox: pendingRect,
           // queue-drawn regions are always POSITIVE — you draw because
@@ -217,7 +225,9 @@ export function Labeling() {
     }
   };
 
-  // keyboard: Space = clean frame (dismiss all + next), arrows navigate
+  // keyboard: Space = clean frame (dismiss all + next); arrows navigate the
+  // queue (prev/next candidate); h/l scrub frames within the context window
+  // (vim-style: h = previous frame, l = next frame).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -228,11 +238,15 @@ export function Labeling() {
         setQIdx((i) => Math.min((queue?.length ?? 1) - 1, i + 1));
       } else if (e.code === "ArrowLeft") {
         setQIdx((i) => Math.max(0, i - 1));
+      } else if (e.code === "KeyH") {
+        setOffset((o) => (ctx ? Math.max(-ctx.center, o - 1) : o));
+      } else if (e.code === "KeyL") {
+        setOffset((o) => (ctx ? Math.min(ctx.ids.length - 1 - ctx.center, o + 1) : o));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dismissFrame, queue?.length]);
+  }, [dismissFrame, queue?.length, ctx]);
 
   return (
     <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-4">
@@ -261,7 +275,7 @@ export function Labeling() {
               <div className="relative border-2 border-border bg-black overflow-hidden">
                 <div
                   ref={stageRef}
-                  className="relative w-full cursor-crosshair"
+                  className="relative w-full cursor-crosshair select-none"
                   style={{ aspectRatio: "650 / 600" }}
                   onPointerDown={onStageDown}
                   onPointerMove={onStageMove}

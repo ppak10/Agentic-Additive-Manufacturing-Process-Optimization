@@ -167,6 +167,7 @@ activemq-data/
 .envrc
 .venv
 .tasks-venv/
+.api-venv/
 env/
 venv/
 ENV/
