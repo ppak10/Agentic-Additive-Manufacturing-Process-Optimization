@@ -46,6 +46,16 @@ def astm_curves(standard: str = Query("D638", pattern="^D(638|790)$")) -> dict:
     return curves.load_curves(standard)
 
 
+@app.get("/api/process-map")
+def process_map() -> dict:
+    """Specimen mechanical outcomes joined to their print-time process
+    parameters — feeds the Research → Process Map page."""
+    try:
+        return db.fetch_process_map()
+    except psycopg.errors.UndefinedTable:
+        raise HTTPException(status_code=503, detail=registry.SYNC_HINT)
+
+
 # ── registry / knowledge (migrated from recorder knowledge.ts) ───────────────
 @app.get("/api/registry")
 def registry_list() -> list[dict]:
@@ -177,6 +187,74 @@ def powder_print(body: dict = Body(...)):
 @app.post("/api/powder-tuning/stop")
 def powder_stop():
     return proxy.plugin("POST", "/powder-tuning/stop")
+
+
+# Patch history reconstructed from the agent action log. The GUI page's local
+# patch state can't survive a reload and never sees agent-driven sinters; the
+# MCP server logs every powder_tuning_* call to agent_actions, so the current
+# session's grid state is a replay of those rows: a successful stop resets,
+# select_patch moves the cursor, print_patch records the setup actually used
+# (its result envelope). Approval refusals log is_error=false but carry no
+# `data` payload — the executed-check below drops them.
+#
+# The stop-row reset alone is not enough: conversation 75's session ended from
+# the wizard after powder_tuning_stop 500'd, leaving a ghost grid in the replay
+# window. So when the live session is inactive, return empty state instead of
+# replaying. If the printer is unreachable the replay is served as-is (stale
+# beats blank when we can't know either way).
+_POWDER_ACTIONS_SQL = """
+SELECT ts, tool, arguments, result, is_error
+FROM agent_actions
+WHERE tool LIKE 'powder_tuning_%%' AND ts > now() - %s * interval '1 hour'
+ORDER BY ts
+"""
+
+
+@app.get("/api/powder-tuning/actions")
+def powder_actions(hours: int = Query(48, ge=1, le=336)) -> dict:
+    session_active: bool | None = None
+    try:
+        status = proxy.http_json_get(proxy.PLUGIN_BASE, "/powder-tuning/status")
+        session_active = bool((status.get("data") or {}).get("isActive"))
+    except HTTPException:
+        pass
+    if session_active is False:
+        return {"selected": None, "patches": [], "window_hours": hours, "session_active": False}
+
+    try:
+        with db.pool.connection() as conn:
+            rows = conn.execute(_POWDER_ACTIONS_SQL, (hours,)).fetchall()
+    except psycopg.errors.UndefinedTable:
+        rows = []
+
+    def executed(result) -> bool:
+        return isinstance(result, dict) and isinstance(result.get("data"), dict)
+
+    selected: int | None = None
+    patches: dict[str, dict] = {}  # keyed by grid index (or "unknown")
+    for row in rows:
+        if row["is_error"]:
+            continue
+        tool, args, result = row["tool"], row["arguments"] or {}, row["result"]
+        if tool == "powder_tuning_stop" and executed(result):
+            selected = None
+            patches = {}
+        elif tool == "powder_tuning_select_patch" and executed(result):
+            if isinstance(args.get("grid_index"), int):
+                selected = args["grid_index"]
+        elif tool == "powder_tuning_print_patch" and executed(result):
+            key = str(selected) if selected is not None else "unknown"
+            patches[key] = {
+                "grid_index": selected,
+                "ts": row["ts"],
+                "setup": result["data"],
+            }
+    return {
+        "selected": selected,
+        "patches": list(patches.values()),
+        "window_hours": hours,
+        "session_active": session_active,
+    }
 
 
 # Stored-job CRUD — thin proxy to the plugin's /jobs/* (bare JSON). More-specific

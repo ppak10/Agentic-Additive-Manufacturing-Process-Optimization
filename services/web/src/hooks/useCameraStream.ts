@@ -1,17 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-// Receives binary JPEG frames over WebSocket and returns a blob URL ready for
-// use as <img src>. Each new frame replaces the previous URL; stale URLs are
-// revoked immediately to avoid memory accumulation.
+// Receives binary JPEG frames over WebSocket and writes them STRAIGHT INTO
+// the consumer's <img> element (attach `imgRef`). Frames arrive at ~12 fps;
+// routing them through React state re-rendered every consumer's whole pane
+// on every frame — measured at ~30-40% main-thread busy at idle on Mission
+// Control (2026-07-28 lag hunt). Imperative src swaps cost React nothing.
+//
+// State is only used for the cheap, rare transitions: `connected` (socket
+// up/down) and `hasFrame` (first frame arrived — placeholder/fallback
+// logic). Stale blob URLs are revoked immediately to avoid accumulation.
 //
 // Reconnects automatically on close with exponential backoff (1 s → 30 s).
-// Returns null until the first frame arrives.
-export function useCameraStream(path: string): { src: string | null; connected: boolean } {
-  const [src, setSrc] = useState<string | null>(null);
+export function useCameraStream(path: string): {
+  imgRef: (el: HTMLImageElement | null) => void;
+  connected: boolean;
+  hasFrame: boolean;
+} {
   const [connected, setConnected] = useState(false);
+  const [hasFrame, setHasFrame] = useState(false);
+  const elRef = useRef<HTMLImageElement | null>(null);
   const currentUrl = useRef<string | null>(null);
-
   const wsRef = useRef<WebSocket | null>(null);
+
+  const imgRef = useCallback((el: HTMLImageElement | null) => {
+    elRef.current = el;
+    // element mounted after frames started flowing — show the latest one
+    if (el && currentUrl.current) el.src = currentUrl.current;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +48,8 @@ export function useCameraStream(path: string): { src: string | null; connected: 
         if (currentUrl.current) URL.revokeObjectURL(currentUrl.current);
         const url = URL.createObjectURL(e.data);
         currentUrl.current = url;
-        setSrc(url);
+        if (elRef.current) elRef.current.src = url;
+        setHasFrame(true); // no-op re-render after the first frame
       };
 
       ws.onclose = () => {
@@ -60,5 +76,5 @@ export function useCameraStream(path: string): { src: string | null; connected: 
     };
   }, [path]);
 
-  return { src, connected };
+  return { imgRef, connected, hasFrame };
 }

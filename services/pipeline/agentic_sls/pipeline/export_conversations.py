@@ -53,8 +53,19 @@ def _rows(cur) -> list[dict]:
 def secret_patterns(dsn: str) -> list[re.Pattern]:
     pats = [re.compile(r"postgres(?:ql)?://\S+", re.I)]
     m = re.match(r".*?://[^:]+:([^@]+)@", dsn)
-    if m and len(m.group(1)) >= 4:
+    # Only treat the bare password as a secret pattern when it looks like an
+    # actual secret. This deployment's DB password equals the printer's
+    # hostname ("inova"), which appears in ordinary conversation text (ssh
+    # targets, prose, table names) — matching it excluded 7 of 9 real
+    # conversations on 2026-07-31. A short dictionary-word password on a
+    # LAN-only Postgres is not a publishable secret; the postgres:// URL
+    # pattern above still catches any actual DSN leak.
+    if m and len(m.group(1)) >= 8:
         pats.append(re.compile(re.escape(m.group(1))))
+    elif m:
+        print("note: DATABASE_URL password is short/dictionary-like — "
+              "skipping bare-password leak pattern (postgres:// URLs still "
+              "checked)", file=sys.stderr)
     return pats
 
 

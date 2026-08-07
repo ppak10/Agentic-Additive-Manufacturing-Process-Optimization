@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
 import { withActionLog } from "../actions.js";
-import { attachArtifact } from "./artifacts.js";
+import { attachArtifact, debugName } from "./artifacts.js";
 import { errorResult, jsonResult } from "../result.js";
 
 // Auto-pin a just-created job to the conversation's artifact panel so the
@@ -226,11 +226,15 @@ export function registerPrinterJobs(server: McpServer, client: InovaClient) {
           // "/" in a name (common in profile names like "32mJ/mm") is
           // sanitized to "_" in the stored filename by the firmware — keep
           // names filesystem-literal so what you ask for is what persists.
-          const cloneName = (
-            name ??
-            `${src.name.replaceAll(TEMPLATE_MARK, "").trim()} - ${profile.name} ` +
-              `(${new Date().toISOString().slice(0, 10)})`
-          ).replace(/[/\\]/g, "-");
+          // Debug conversations get a "[DEBUG] " prefix (server-enforced)
+          // so test content is findable and deletable later.
+          const cloneName = await debugName(
+            (
+              name ??
+              `${src.name.replaceAll(TEMPLATE_MARK, "").trim()} - ${profile.name} ` +
+                `(${new Date().toISOString().slice(0, 10)})`
+            ).replace(/[/\\]/g, "-"),
+          );
           const clone = await client.postBare<JobDetail>(
             `/jobs/${template_job_id}/clone`,
             { name: cloneName, printProfileId: print_profile_id },

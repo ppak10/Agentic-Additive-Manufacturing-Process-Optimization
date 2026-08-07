@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useBedMatrix } from "@/hooks/useBedMatrix";
-import { plasma, matrixStats } from "@/lib/thermal";
+import { matrixStats } from "@/lib/thermal";
+import {
+  BED_THERM,
+  composePT,
+  paintThermalOverlay,
+  useChamberCalib,
+  useThermalQuad,
+} from "@/components/ThermalOverlay";
 import { useCameraStream } from "@/hooks/useCameraStream";
 import { useDefectWatch, type DefectBlob } from "@/hooks/useDefectWatch";
 import { DEFECT_COLORS, DEFECT_ALPHA_FLOOR, extractBlobs } from "@/lib/defects";
@@ -19,6 +26,7 @@ import {
   type PrintingObject,
 } from "@/hooks/usePrintingObjects";
 import { ConfirmModal } from "@/panels/BuildLayoutPanel";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useLayerSlices } from "@/hooks/useLayerSlices";
 import { cn } from "@/lib/utils";
 import {
@@ -27,10 +35,7 @@ import {
   BED_CAM,
   ALIGN_MARGIN,
   DEFAULT_QUAD,
-  QUAD_KEY,
-  homography,
   projector,
-  loadCalib,
   saveCalib,
   type Quad,
 } from "@/lib/projection";
@@ -43,36 +48,9 @@ import {
 // system escalates into the bar when it needs them.
 
 // Chamber feed with the streamed thermal matrix registered onto the bed.
-// Calibration comes from the FIRMWARE'S OWN config (sls4all/SLS4All-Backup/
-// Current/appsettings*.toml, retrieved 2026-07-16):
-//   MjpegDeviceCamera: served frame 650x600 (rotated);
-//     SafeWorkingArea (bed in camera px): x 105-545, y 113-547
-//   Mlx90640Camera.MainBox (bed in thermal px, 32x24 sensor): x 10-24, y 9-23
-// The thermal canvas is cropped to MainBox and pinned over SafeWorkingArea.
-const BED_THERM = { sx: 10, sy: 9, sw: 15, sh: 15 }; // MainBox, inclusive
-// Full 32x24 matrix placement, extrapolated from the MainBox<->SafeWorkingArea
-// correspondence (same px scale, no crop): overlay extends past the stage and
-// is clipped by the pane, covering the whole chamber view bed-registered.
-const THERM_W = 32, THERM_H = 24;
-// Operator-trimmed crop (2026-07-16): the leftmost 7 and rightmost 4
-// thermal columns, and the TOP 5 rows, fall outside the chamber view —
-// drop them. Bed cells (x 10-24, y 9-23) remain fully inside the kept
-// range.
-const THERM_CROP = { sx: 7, sw: THERM_W - 7 - 4, sy: 5, sh: THERM_H - 5 }; // cols 7..27, rows 5..23
-// Thermal grid → plotter-uv homography quad (the T in thermal→image =
-// H∘T): plotter-space positions of the thermal grid's 4 corners, seeded
-// FLAT from Mlx90640 MainBox (bed = cells x 10-24, y 9-23 → linear
-// extrapolation). The DB row (calibrations kind='thermal_to_plotter')
-// overrides on load; a dedicated thermal align mode can refine it later —
-// the thermal camera sits elsewhere, so its true T has its own
-// perspective. Composing with H means the temperature grid inherits the
-// video camera's perspective + fisheye AND every future re-align for free.
-const THERMAL_T_SEED: Quad = [
-  [(0 - BED_THERM.sx) / BED_THERM.sw, (0 - BED_THERM.sy) / BED_THERM.sh],
-  [(THERM_W - BED_THERM.sx) / BED_THERM.sw, (0 - BED_THERM.sy) / BED_THERM.sh],
-  [(THERM_W - BED_THERM.sx) / BED_THERM.sw, (THERM_H - BED_THERM.sy) / BED_THERM.sh],
-  [(0 - BED_THERM.sx) / BED_THERM.sw, (THERM_H - BED_THERM.sy) / BED_THERM.sh],
-];
+// The thermal constants, calibration adoption, PT = H∘T composition, and
+// canvas paint all live in components/ThermalOverlay.tsx now — shared with
+// the powder-tuning artifact panel's Temp overlay.
 
 // Plotter → chamber registration for the exclude-object overlay. The flat
 // BED_CAM rect ignores the camera's perspective (angled view + fisheye),
@@ -80,6 +58,148 @@ const THERMAL_T_SEED: Quad = [
 // from the plotter's unit square to a user-aligned quadrilateral in image
 // coords — the operator drags the four corners ("Align" mode) until the
 // outlines sit on the actual scan marks; corners persist in localStorage.
+
+// Graceful stop button + mode-picker modal. Shown while any job is running
+// (prints, wizard heat-ups, powder tuning). The modal offers only the
+// soft-cancel modes the firmware currently allows (/api/printing/cancel);
+// the POST is relayed by the recorder, which logs it as an operator_action.
+// Hard cancel is deliberately absent — that stays on the printer's own UI.
+const STOP_MODE_LABELS: Record<string, { label: string; hint: string }> = {
+  CapAndCool: {
+    label: "Cap & cool!",
+    hint: "lay the powder cap first, then start cooling (recommended)",
+  },
+  CoolNow: {
+    label: "Cool now!",
+    hint: "skip the cap and start cooling immediately",
+  },
+  Immediate: {
+    label: "Stop immediately!",
+    hint: "hard cancel — laser off, job abandoned on the spot; no cap, no controlled cooling",
+  },
+};
+
+function StopControl({ phase }: { phase: string | null }) {
+  const active = !!phase && phase !== "NotSet";
+  const [open, setOpen] = useState(false);
+  const [allowed, setAllowed] = useState<string[] | null>(null); // null = loading
+  const [requested, setRequested] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const openModal = async () => {
+    setOpen(true);
+    setErr(null);
+    setAllowed(null);
+    try {
+      const r = await fetch("/api/printing/cancel");
+      const d = await r.json();
+      if (!r.ok) {
+        // distinguish "old plugin without the endpoint" from a real
+        // no-modes answer — the latter comes with 200 + empty list
+        setAllowed([]);
+        setErr(
+          d?.status === 404
+            ? "printer plugin predates soft-cancel — deploy the updated plugin"
+            : d?.error ?? `HTTP ${r.status}`,
+        );
+        return;
+      }
+      const modes = (d?.data?.allowedModes ?? []) as string[];
+      setAllowed(modes.filter((m) => m !== "NotSet"));
+      if (d?.data?.softCancelMode && d.data.softCancelMode !== "NotSet") {
+        setRequested(d.data.softCancelMode as string);
+      }
+    } catch {
+      setAllowed([]);
+      setErr("printer unreachable");
+    }
+  };
+  const request = async (mode: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r =
+        mode === "Immediate"
+          ? await fetch("/api/printing/hard-cancel", { method: "POST" })
+          : await fetch("/api/printing/soft-cancel", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ mode }),
+            });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`);
+      setRequested(mode);
+      setOpen(false);
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!active) return null;
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="neutral"
+        onClick={() => void openModal()}
+        title="Stop the running job gracefully (cap & cool / cool now)"
+        className={cn(
+          "h-7 px-2 text-[10px] font-mono",
+          requested ? "bg-amber-400 text-black" : "bg-red-600 text-white hover:bg-red-500",
+        )}
+      >
+        {requested ? `Stopping: ${STOP_MODE_LABELS[requested]?.label ?? requested}` : "Stop…"}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Stop the running job?</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs opacity-70">
+            Phase: <span className="font-mono">{phase}</span>. Both options end the job
+            gracefully — this cannot be un-requested from here.
+          </p>
+          {allowed === null && <p className="text-xs opacity-50">Checking allowed modes…</p>}
+          {allowed !== null && allowed.length === 0 && !err && (
+            <p className="text-xs opacity-70">
+              No graceful stop is available in this phase — only the hard stop below.
+            </p>
+          )}
+          <div className="flex flex-col gap-2">
+            {/* soft modes as the firmware allows them; the hard stop is
+                always offered (firmware GUI parity: Stop immediately!) */}
+            {[...(allowed ?? []), ...(allowed !== null ? ["Immediate"] : [])].map((m) => (
+              <Button
+                key={m}
+                variant="neutral"
+                disabled={busy}
+                onClick={() => void request(m)}
+                className={cn(
+                  "justify-start h-auto py-2 text-left",
+                  m === "Immediate" && "bg-red-600 text-white hover:bg-red-500",
+                )}
+              >
+                <span className="flex flex-col items-start gap-0.5">
+                  <span className="font-heading text-sm">{STOP_MODE_LABELS[m]?.label ?? m}</span>
+                  <span
+                    className={cn(
+                      "text-[10px] font-mono",
+                      m === "Immediate" ? "opacity-80" : "opacity-60",
+                    )}
+                  >
+                    {STOP_MODE_LABELS[m]?.hint ?? ""}
+                  </span>
+                </span>
+              </Button>
+            ))}
+          </div>
+          {err && <p className="text-xs text-red-600">{err}</p>}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
 
 // Exported so the conversation artifact panel can surface the same live feed
 // while a print is running (see panels/ArtifactPanel.tsx).
@@ -158,31 +278,8 @@ export function ChamberThermalPane({ phase }: { phase: string | null }) {
   // recorded server-side as an operator_action event.
   const plotterObjects = usePlotterObjects(2000);
   const { objects: printingObjects, refresh: refreshObjects } = usePrintingObjects(2000);
-  const [{ quad, k1 }, setCalib] = useState(loadCalib);
-  // DB is the shared authoritative calibration store — on mount, adopt the
-  // calibrations-table row if it's newer than what this browser saved
-  // locally (whoever aligned most recently wins, across machines)
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/calibration/plotter_to_camera");
-        if (!r.ok) return; // recorder endpoint not deployed yet, or no row
-        const row = await r.json();
-        const p = row?.payload;
-        if (!Array.isArray(p?.quad) || p.quad.length !== 4) return;
-        let localSavedAt = 0;
-        try {
-          localSavedAt = Number(JSON.parse(localStorage.getItem(QUAD_KEY) ?? "{}")?.savedAt) || 0;
-        } catch { /* no local save */ }
-        if (cancelled || new Date(row.created_at).getTime() <= localSavedAt) return;
-        setCalib({ quad: p.quad as Quad, k1: Number(p.k1) || 0 });
-      } catch { /* offline — local/env values stand */ }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Local echo + DB adoption shared with the tuning panel's overlay.
+  const [{ quad, k1 }, setCalib] = useChamberCalib();
   const setQuad = (fn: (q: Quad) => Quad) =>
     setCalib((c) => ({ ...c, quad: fn(c.quad) }));
   const [aligning, setAligning] = useState(false);
@@ -191,30 +288,8 @@ export function ChamberThermalPane({ phase }: { phase: string | null }) {
   const H = useMemo(() => projector(quad, k1), [quad, k1]);
   // T: thermal grid → plotter uv (DB-overridable, flat MainBox seed);
   // PT = H∘T projects a thermal cell coordinate onto the chamber image
-  const [thermQuad, setThermQuad] = useState<Quad>(THERMAL_T_SEED);
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/calibration/thermal_to_plotter");
-        if (!r.ok) return; // endpoint not deployed yet / no row — seed stands
-        const row = await r.json();
-        if (!cancelled && Array.isArray(row?.payload?.quad) && row.payload.quad.length === 4) {
-          setThermQuad(row.payload.quad as Quad);
-        }
-      } catch { /* offline — seed stands */ }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const PT = useMemo(() => {
-    const T = homography(thermQuad);
-    return (tx: number, ty: number): [number, number] => {
-      const [u, v] = T(tx / THERM_W, ty / THERM_H);
-      return H(u, v);
-    };
-  }, [thermQuad, H]);
+  const thermQuad = useThermalQuad();
+  const PT = useMemo(() => composePT(thermQuad, H), [thermQuad, H]);
   const onQuadDrag = (e: React.PointerEvent<SVGSVGElement>) => {
     if (dragIdx.current == null || !overlaySvgRef.current) return;
     const r = overlaySvgRef.current.getBoundingClientRect();
@@ -420,75 +495,11 @@ export function ChamberThermalPane({ phase }: { phase: string | null }) {
         bed.push(values[y * width + x]);
     return matrixStats(bed);
   }, [frame]);
-  // Per-cell temperature DIGITS, font-colored by the shared plasma palette
-  // (normalized over the visible crop). Every cell center and grid vertex
-  // is projected through PT = H∘T, so the grid follows the bed's
-  // perspective + fisheye exactly like the part vectors do (it used to be
-  // a flat CSS rectangle that visibly disagreed at the edges). Dark halo
-  // via strokeText, NOT shadowBlur — canvas shadows janked the pane.
+  // Per-cell temperature digits + dashed grid, projected through PT — the
+  // paint routine is shared with the tuning panel (ThermalOverlay.tsx).
   useEffect(() => {
     if (!frame || !canvasRef.current || !showTemp || labeling) return; // no work while hidden / labeling
-    const { width, values } = frame.data;
-    const c = canvasRef.current;
-    const S = 2; // supersample for crisp glyphs
-    c.width = CAM_W * S;
-    c.height = CAM_H * S;
-    const ctx = c.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, c.width, c.height);
-    const px = (tx: number, ty: number): [number, number] => {
-      const [x, y] = PT(tx, ty);
-      return [x * CAM_W * S, y * CAM_H * S];
-    };
-    let min = Infinity, max = -Infinity;
-    for (let y = THERM_CROP.sy; y < THERM_CROP.sy + THERM_CROP.sh; y++)
-      for (let x = THERM_CROP.sx; x < THERM_CROP.sx + THERM_CROP.sw; x++) {
-        const v = values[y * width + x]!;
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    const range = max - min || 1;
-    // dashed 1px cell grid, alternating black/white segments — projected
-    // polylines (one vertex per cell step approximates the fisheye curve)
-    ctx.save();
-    ctx.lineWidth = S;
-    const polyline = (pts: [number, number][]) => {
-      ctx.beginPath();
-      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.stroke();
-    };
-    for (const [color, offset] of [["rgba(0,0,0,0.6)", 0], ["rgba(255,255,255,0.6)", 4]] as const) {
-      ctx.strokeStyle = color;
-      ctx.setLineDash([4 * S, 4 * S]);
-      ctx.lineDashOffset = offset * S;
-      for (let x = THERM_CROP.sx; x <= THERM_CROP.sx + THERM_CROP.sw; x++) {
-        const pts: [number, number][] = [];
-        for (let y = THERM_CROP.sy; y <= THERM_CROP.sy + THERM_CROP.sh; y++) pts.push(px(x, y));
-        polyline(pts);
-      }
-      for (let y = THERM_CROP.sy; y <= THERM_CROP.sy + THERM_CROP.sh; y++) {
-        const pts: [number, number][] = [];
-        for (let x = THERM_CROP.sx; x <= THERM_CROP.sx + THERM_CROP.sw; x++) pts.push(px(x, y));
-        polyline(pts);
-      }
-    }
-    ctx.restore();
-    ctx.font = `bold ${13 * S}px ui-monospace, monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineWidth = 3 * S;
-    ctx.strokeStyle = "rgba(0,0,0,0.8)";
-    ctx.lineJoin = "round";
-    for (let y = THERM_CROP.sy; y < THERM_CROP.sy + THERM_CROP.sh; y++)
-      for (let x = THERM_CROP.sx; x < THERM_CROP.sx + THERM_CROP.sw; x++) {
-        const v = values[y * width + x]!;
-        const [r, g, b] = plasma((v - min) / range);
-        const [tx, ty] = px(x + 0.5, y + 0.5);
-        const label = v.toFixed(0);
-        ctx.strokeText(label, tx, ty);
-        ctx.fillStyle = `rgb(${r | 0},${g | 0},${b | 0})`;
-        ctx.fillText(label, tx, ty);
-      }
+    paintThermalOverlay(canvasRef.current, frame, PT);
   }, [frame, showTemp, PT, labeling]);
   return (
     <Card className="h-full min-h-0 flex flex-col gap-2 py-3">
@@ -575,6 +586,7 @@ export function ChamberThermalPane({ phase }: { phase: string | null }) {
                 {aligning ? "Done aligning" : "Align"}
               </Button>
             )}
+            <StopControl phase={phase} />
           </div>
         </CardTitle>
       </CardHeader>
@@ -599,9 +611,15 @@ export function ChamberThermalPane({ phase }: { phase: string | null }) {
               height: `min(100cqh, calc(100cqw * ${CAM_H / CAM_W}))`,
             }}
           >
-            {chamber.src ? (
-              <img src={chamber.src} alt="chamber" className="absolute inset-0 w-full h-full" />
-            ) : (
+            {/* frames land on this img imperatively (useCameraStream imgRef)
+                — no React re-render per frame */}
+            <img
+              ref={chamber.imgRef}
+              alt="chamber"
+              className="absolute inset-0 w-full h-full"
+              style={{ visibility: chamber.hasFrame ? "visible" : "hidden" }}
+            />
+            {!chamber.hasFrame && (
               <div className="absolute inset-0 flex items-center justify-center text-xs opacity-40 text-white">
                 waiting for chamber…
               </div>

@@ -103,7 +103,10 @@ interface TurnResult extends TurnStats {
   exitCode: number;
 }
 
-function buildCmd(chat: Chat, message: string): string[] {
+// `model` is the per-conversation override (agent_conversation_settings.
+// model_override), resolved fresh each turn so a mid-conversation switch
+// takes effect on the next message. Absent → each harness's own default.
+function buildCmd(chat: Chat, message: string, model?: string | null): string[] {
   const resume = chat.cliSessionId;
   switch (chat.harness) {
     case "claude": {
@@ -112,6 +115,7 @@ function buildCmd(chat: Chat, message: string): string[] {
         "-p",
         message,
         ...(resume ? ["--resume", resume] : []),
+        ...(model ? ["--model", model] : []),
         "--output-format",
         "stream-json",
         "--verbose",
@@ -128,7 +132,12 @@ function buildCmd(chat: Chat, message: string): string[] {
         : ["codex", "exec", message];
       // MCP calls are auto-cancelled in exec mode without the bypass
       // (openai/codex#16685).
-      return [...base, "--json", "--dangerously-bypass-approvals-and-sandbox"];
+      return [
+        ...base,
+        ...(model ? ["--model", model] : []),
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+      ];
     }
     case "opencode":
       return [
@@ -139,7 +148,7 @@ function buildCmd(chat: Chat, message: string): string[] {
         "--print-logs",
         // Explicit model required — zen default errors upstream (2026-07-16)
         "--model",
-        process.env.OPENCODE_MODEL ?? "opencode/deepseek-v4-flash-free",
+        model ?? process.env.OPENCODE_MODEL ?? "opencode/deepseek-v4-flash-free",
       ];
     case "agy":
       return [
@@ -150,6 +159,7 @@ function buildCmd(chat: Chat, message: string): string[] {
         // most recent conversation. `busy` serializes turns per chat, but
         // two concurrent agy chats could cross-talk — v1 limitation.
         ...(resume ? ["-c"] : []),
+        ...(model ? ["--model", model] : []),
         "--dangerously-skip-permissions",
       ];
   }
@@ -164,8 +174,9 @@ function runTurn(
   // Injected as AGENTIC_FOCUS so the MCP artifact_list tool can report what
   // the operator is looking at (fresh spawn per turn → env is the channel).
   focus?: string,
+  model?: string | null,
 ): Promise<{ res: TurnResult; stdout: string; stderr: string }> {
-  const cmd = buildCmd(chat, message);
+  const cmd = buildCmd(chat, message, model);
   const child = spawn(cmd[0], cmd.slice(1), {
     cwd: PLUGINS_ROOT,
     // Scope the MCP approval gate to this conversation (read by
@@ -305,6 +316,59 @@ function assembleSnapshot(ev: DefectEventRow): Record<string, unknown> {
     input_frame_event_id: ev.id,
     maps_png: ev.payload?.maps_png ?? null,
   };
+}
+
+// Powder-tuning session watcher. When a session becomes active on the
+// printer (the operator starts the firmware wizard — there is no API start),
+// auto-attach the singleton powder_tuning artifact to every chat
+// conversation with recent activity, so open panels show the live tuning
+// view without anyone asking. `tuningActive` is also consulted at turn
+// start (streamChatTurn) to cover conversations that join mid-session.
+let tuningActive = false;
+
+async function attachTuningArtifact(p: pg.Pool, convId: number | string): Promise<void> {
+  await p.query(
+    `INSERT INTO conversation_artifacts
+       (conversation_id, artifact_type, artifact_id, provenance, attached_by)
+     VALUES ($1, 'powder_tuning', 'session', 'referenced', 'system')
+     ON CONFLICT (conversation_id, artifact_type, artifact_id) DO NOTHING`,
+    [convId],
+  );
+}
+
+function startTuningWatcher(p: pg.Pool): void {
+  const base = process.env.INOVA_API_BASE_URL ?? "http://192.168.1.146:5001";
+  setInterval(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`${base}/powder-tuning/status`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!res.ok) return;
+        const status = (await res.json()) as { data?: { isActive?: boolean } };
+        const active = status.data?.isActive === true;
+        if (active && !tuningActive) {
+          // inactive → active: fan out to conversations active in the last
+          // 12 h (a broker boot mid-session counts as a transition, so a
+          // restart while tuning still attaches panels).
+          const { rows } = await p.query(
+            `SELECT DISTINCT c.id FROM agent_conversations c
+             JOIN agent_messages m ON m.conversation_id = c.id
+             WHERE m.ts > now() - interval '12 hours' AND c.role = 'chat'`,
+          );
+          for (const r of rows) await attachTuningArtifact(p, r.id).catch(() => {});
+          if (rows.length > 0) {
+            console.error(
+              `powder-tuning session active — panel attached to ${rows.length} conversation(s)`,
+            );
+          }
+        }
+        tuningActive = active;
+      } catch {
+        /* printer unreachable — keep last known state */
+      }
+    })();
+  }, 15_000);
 }
 
 function startAlertWatcher(p: pg.Pool): void {
@@ -477,6 +541,27 @@ app.post<{ Body: { harness: Harness; debug?: boolean } }>(
       } catch (err) {
         console.error("auto-attach active build failed:", (err as Error)?.message);
       }
+      // Likewise auto-attach the live powder-tuning view when a session is
+      // active, so a conversation opened mid-session starts with the patch
+      // grid on screen. Singleton artifact (id 'session'); removable.
+      try {
+        const base = process.env.INOVA_API_BASE_URL ?? "http://192.168.1.146:5001";
+        const res = await fetch(`${base}/powder-tuning/status`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        const status = (await res.json()) as { data?: { isActive?: boolean } };
+        if (res.ok && status.data?.isActive) {
+          await pool.query(
+            `INSERT INTO conversation_artifacts
+               (conversation_id, artifact_type, artifact_id, provenance, attached_by)
+             VALUES ($1, 'powder_tuning', 'session', 'referenced', 'system')
+             ON CONFLICT (conversation_id, artifact_type, artifact_id) DO NOTHING`,
+            [chat.conversationId],
+          );
+        }
+      } catch {
+        // printer unreachable — no tuning session to attach
+      }
     }
     chats.set(id, chat);
     return {
@@ -502,6 +587,12 @@ async function streamChatTurn(
   chat.turn += 1;
   const startedAt = new Date();
 
+  // A conversation used while a powder-tuning session is live gets the
+  // tuning panel attached (idempotent) — covers chats that join mid-session.
+  if (tuningActive && pool && chat.conversationId != null) {
+    attachTuningArtifact(pool, chat.conversationId).catch(() => {});
+  }
+
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -518,8 +609,22 @@ async function streamChatTurn(
   parts.push(message);
   const fullMessage = parts.join("\n\n");
 
+  // Per-conversation model override, resolved fresh each turn so a switch in
+  // the GUI applies from the next message onward.
+  let model: string | null = null;
+  if (pool && chat.conversationId != null) {
+    try {
+      await ensureApprovals();
+      const { rows } = await pool.query(
+        "SELECT model_override FROM agent_conversation_settings WHERE conversation_id = $1",
+        [chat.conversationId],
+      );
+      model = rows[0]?.model_override ?? null;
+    } catch { /* fall back to harness default */ }
+  }
+
   try {
-    const r = await runTurn(chat, fullMessage, emit, undefined, focus);
+    const r = await runTurn(chat, fullMessage, emit, undefined, focus, model);
     chat.cliSessionId = r.res.cliSessionId;
     await recordTurn(chat, message, startedAt, r).catch((err) =>
       console.error("recordTurn failed:", err?.message),
@@ -868,8 +973,12 @@ const APPROVALS_DDL = `
 CREATE TABLE IF NOT EXISTS agent_conversation_settings (
   conversation_id BIGINT PRIMARY KEY,
   approval_mode   TEXT NOT NULL DEFAULT 'ask',
+  model_override  TEXT,
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- the MCP server's mirrored DDL may have created the table without the
+-- model column — additive, idempotent
+ALTER TABLE agent_conversation_settings ADD COLUMN IF NOT EXISTS model_override TEXT;
 CREATE TABLE IF NOT EXISTS agent_approvals (
   id              BIGSERIAL PRIMARY KEY,
   conversation_id BIGINT NOT NULL,
@@ -904,10 +1013,14 @@ app.get<{ Params: { id: string } }>(
       [id],
     );
     const { rows: s } = await pool.query(
-      "SELECT approval_mode FROM agent_conversation_settings WHERE conversation_id = $1",
+      "SELECT approval_mode, model_override FROM agent_conversation_settings WHERE conversation_id = $1",
       [id],
     );
-    return { mode: s[0]?.approval_mode ?? "ask", pending };
+    return {
+      mode: s[0]?.approval_mode ?? "ask",
+      pending,
+      modelOverride: s[0]?.model_override ?? null,
+    };
   },
 );
 
@@ -951,6 +1064,33 @@ app.post<{ Params: { id: string }; Body: { mode?: string } }>(
       [id, mode],
     );
     return { ok: true, mode };
+  },
+);
+
+// Set (or clear, with null/empty) the conversation's model override. The
+// string is passed verbatim as the harness CLI's --model on subsequent turns
+// — an id the CLI doesn't know fails at spawn, which surfaces as a turn
+// error, so no allowlist here; the GUI curates the choices.
+app.post<{ Params: { id: string }; Body: { model?: string | null } }>(
+  "/agent/conversations/:id/model",
+  async (req, reply) => {
+    if (!pool) return reply.code(503).send({ error: "DATABASE_URL not set" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: "bad id" });
+    const raw = req.body?.model;
+    if (raw != null && typeof raw !== "string") {
+      return reply.code(400).send({ error: "model must be a string or null" });
+    }
+    const model = raw?.trim() ? raw.trim() : null;
+    await ensureApprovals();
+    await pool.query(
+      `INSERT INTO agent_conversation_settings (conversation_id, model_override, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (conversation_id)
+       DO UPDATE SET model_override = EXCLUDED.model_override, updated_at = now()`,
+      [id, model],
+    );
+    return { ok: true, model };
   },
 );
 
@@ -1034,3 +1174,6 @@ console.error(`agent broker on :${PORT} (db: ${pool ? "yes" : "NO"})`);
 // Build-scoped defect-alert watcher — writes build_alerts for conversations
 // subscribed via an attached build artifact (needs the recorder's events).
 if (pool) startAlertWatcher(pool);
+// Powder-tuning session watcher — attaches the live tuning panel to recent
+// conversations when the operator starts a session on the printer.
+if (pool) startTuningWatcher(pool);

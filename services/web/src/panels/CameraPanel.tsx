@@ -8,7 +8,7 @@ import { useCameraStream } from "@/hooks/useCameraStream";
 // ICameraClient.Captured event. No polling — frames arrive at rpicam-vid's
 // native 12 fps.
 function ChamberTile() {
-  const { src, connected } = useCameraStream("/api/camera/chamber/stream");
+  const { imgRef, connected, hasFrame } = useCameraStream("/api/camera/chamber/stream");
   return (
     <ExpandableCard
       title={
@@ -20,13 +20,14 @@ function ChamberTile() {
         </>
       }
     >
-      {src ? (
-        <img
-          src={src}
-          alt="Chamber"
-          className="block w-full border-2 border-border bg-background object-contain"
-        />
-      ) : (
+      {/* frames land on the img imperatively — no re-render per frame */}
+      <img
+        ref={imgRef}
+        alt="Chamber"
+        className="block w-full border-2 border-border bg-background object-contain"
+        style={{ display: hasFrame ? undefined : "none" }}
+      />
+      {!hasFrame && (
         <div className="border-2 border-border bg-background aspect-video flex items-center justify-center text-xs opacity-40">
           waiting for stream…
         </div>

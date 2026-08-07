@@ -38,8 +38,8 @@ import { Replay } from "@/pages/Replay";
 import { PrintProfiles } from "@/pages/PrintProfiles";
 import { Jobs } from "@/pages/Jobs";
 import { AstmTests } from "@/pages/AstmTests";
+import { ProcessMap } from "@/pages/ProcessMap";
 import { Tasks } from "@/pages/Tasks";
-import { PowderTuning } from "@/pages/PowderTuning";
 import { ServiceDetail } from "@/pages/Services";
 import { MissionControl } from "@/pages/MissionControl";
 import { SettingsPage } from "@/pages/Settings";
@@ -59,6 +59,7 @@ import { ArtifactSplit, ArtifactProvider, useCurrentArtifacts, type Artifact } f
 // as Machine below). Rendered in Mission Control's old top slot.
 const RESEARCH_ITEMS = [
   { to: "/tests", label: "Tests" },
+  { to: "/research/process-map", label: "Process Map" },
   { to: "/research/material", label: "Material" },
 ] as const;
 
@@ -70,7 +71,6 @@ const MACHINE_ITEMS = [
   { to: "/profiles", label: "Print Profiles" },
   { to: "/builds", label: "Builds" },
   { to: "/tasks", label: "Tasks" },
-  { to: "/powder-tuning", label: "Powder Tuning" },
 ] as const;
 
 // ChatGPT-style recent-conversations list: the agent plane's history,
@@ -325,10 +325,11 @@ function AppShell() {
             <Route path="/profiles/:id?" element={<PrintProfiles />} />
             <Route path="/jobs/:id?" element={<Jobs />} />
             <Route path="/tasks/:id?" element={<Tasks />} />
-            <Route path="/powder-tuning" element={<PowderTuning />} />
             <Route path="/mission" element={<MissionControl job={job} />} />
             {/* Research — ASTM mechanical-test specimen browser */}
             <Route path="/tests" element={<AstmTests />} />
+            {/* Research — mechanical outcomes across process-parameter space */}
+            <Route path="/research/process-map" element={<ProcessMap />} />
             {/* Research — placeholder pages (2026-07-19) */}
             <Route
               path="/research/material"

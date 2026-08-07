@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { InovaClient } from "../client.js";
 import { withActionLog } from "../actions.js";
+import { attachArtifact, debugName } from "./artifacts.js";
 import { errorResult, jsonResult } from "../result.js";
 
 // Print-profile tools — live CRUD against the plugin's /profiles routes.
@@ -319,11 +320,21 @@ export function registerPrinterProfiles(server: McpServer, client: InovaClient) 
             delete base.name;
             delete base.createdAt;
           }
+          // Debug conversations get a "[DEBUG] " name prefix (server-enforced)
+          // so test content is findable and deletable later.
           const created = await client.postBare<Record<string, unknown>>("/profiles", {
             ...base,
             ...toBody(fields ?? {}),
-            name: name.trim(),
+            name: await debugName(name.trim()),
           });
+          // Pin the new profile to the conversation panel (provenance='created')
+          // so the operator sees the agent's output without a second tool call.
+          const convId = Number(process.env.AGENTIC_CONVERSATION_ID);
+          if (Number.isFinite(convId) && convId > 0 && typeof created.id === "string") {
+            await attachArtifact(convId, "profile", created.id, "created").catch((err) =>
+              console.error("artifact auto-attach failed:", (err as Error)?.message),
+            );
+          }
           return jsonResult({
             action: "created",
             profile: project(created),

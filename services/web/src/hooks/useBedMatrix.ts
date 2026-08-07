@@ -22,7 +22,10 @@ export function useBedMatrix(): { frame: BedMatrixFrame | null; connected: boole
     const connect = () => {
       if (cancelled) return;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${window.location.host}/api/temperature/bedmatrix/stream`);
+      // ?hz=4: the plugin decimates server-side (its raw stream runs ~111 Hz
+      // — measured 2026-07-28 — though the sensor itself is ~6 Hz). 4 Hz is
+      // ample for a thermal overlay and cuts ~860 KB/s + a JSON.parse storm.
+      const ws = new WebSocket(`${proto}://${window.location.host}/api/temperature/bedmatrix/stream?hz=4`);
       wsRef.current = ws;
       ws.onopen = () => { setConnected(true); backoff = 1000; };
       ws.onmessage = (e) => {

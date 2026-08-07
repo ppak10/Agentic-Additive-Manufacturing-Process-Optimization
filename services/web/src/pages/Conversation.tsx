@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronRight, ThumbsUp, ThumbsDown, Bell, BellOff } from "lucide-react";
+import { Check, ChevronRight, Copy, Settings as SettingsIcon, ThumbsUp, ThumbsDown, Bell, BellOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { HarnessIcon, HARNESS_LABELS, HARNESS_MODELS, modelLabel } from "@/components/HarnessIcon";
 import { Markdown } from "@/components/Markdown";
 import { useSetArtifacts, type Artifact } from "@/panels/ArtifactPanel";
 import { refreshConversations } from "@/hooks/useConversations";
@@ -38,12 +41,13 @@ interface Msg {
 }
 
 // One row of the agent-curated artifact panel (conversation_artifacts, via the
-// artifact_* MCP tools). artifact_id is a job/profile UUID or a numeric build id.
+// artifact_* MCP tools). artifact_id is a job/profile UUID or a numeric build
+// id; powder_tuning is a singleton (id 'session') for the live tuning view.
 interface ConvArtifact {
-  artifact_type: "job" | "build" | "profile";
+  artifact_type: "job" | "build" | "profile" | "powder_tuning";
   artifact_id: string;
   provenance: "created" | "referenced";
-  attached_by: "agent" | "operator";
+  attached_by: "agent" | "operator" | "system";
   note: string | null;
   attached_at: string;
 }
@@ -90,6 +94,49 @@ interface FeedbackRow {
 }
 
 type ApprovalMode = "ask" | "auto" | "plan";
+
+// Approval-mode tabs, labeled with the backend values themselves
+// (agent_conversation_settings.approval_mode). Ordered strictest → loosest.
+const APPROVAL_TABS: { value: ApprovalMode; label: string; hint: string }[] = [
+  { value: "plan", label: "Plan", hint: "write actions are refused — the agent reads, you act" },
+  { value: "ask", label: "Ask", hint: "write actions need your approval" },
+  { value: "auto", label: "Auto", hint: "every tool action runs without asking" },
+];
+
+// The segmented approval-mode control — shared by the conversation composer
+// and the new-conversation draft so the two read identically.
+function ModeTabs({
+  value,
+  onChange,
+}: {
+  value: ApprovalMode;
+  onChange: (m: ApprovalMode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-[10px] font-mono">
+      <div className="flex rounded-base border-2 border-border overflow-hidden">
+        {APPROVAL_TABS.map((t) => (
+          <button
+            key={t.value}
+            onClick={() => onChange(t.value)}
+            title={t.hint}
+            className={cn(
+              "px-2 py-0.5 font-heading transition-colors",
+              value === t.value
+                ? "bg-main text-main-foreground"
+                : "bg-background opacity-50 hover:opacity-100 hover:bg-secondary-background",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <span className="opacity-50">
+        {APPROVAL_TABS.find((t) => t.value === value)?.hint}
+      </span>
+    </div>
+  );
+}
 interface PendingApproval {
   id: number;
   tool: string;
@@ -97,23 +144,113 @@ interface PendingApproval {
   created_at: string;
 }
 
-// A tool_result directly after its tool_call collapses into one row.
+// Model picker — bottom-right of the composer, Claude-Desktop style. `value`
+// is the conversation's model OVERRIDE (null = harness default); `observed`
+// is what the CLI stream actually reported, shown when no override is set so
+// the operator always knows the model in use. Selecting "Default" clears the
+// override. Menu opens upward (the composer sits at the window bottom).
+function ModelPicker({
+  harness,
+  value,
+  observed,
+  onChange,
+  disabled,
+}: {
+  harness: string;
+  value: string | null;
+  observed?: string | null;
+  onChange: (model: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const models = HARNESS_MODELS[harness] ?? [];
+  const current = value ?? observed ?? null;
+  // an override / observed id outside the catalog still needs a menu entry
+  const extra =
+    current && !models.some((m) => m.id === current)
+      ? [{ id: current, label: modelLabel(harness, current) }]
+      : [];
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        title={current ?? "harness default model"}
+        className={cn(
+          "flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-base",
+          "opacity-60 hover:opacity-100 hover:bg-secondary-background disabled:opacity-30",
+        )}
+      >
+        {modelLabel(harness, current)}
+        <ChevronRight className={cn("size-3 transition-transform", open ? "-rotate-90" : "rotate-90")} />
+      </button>
+      {open && (
+        <div className="absolute bottom-full right-0 mb-1.5 z-20 min-w-44 border-2 border-border rounded-base bg-background shadow-shadow overflow-hidden flex flex-col">
+          {[...models, ...extra].map((m) => (
+            <button
+              key={m.id}
+              onClick={() => {
+                onChange(m.id);
+                setOpen(false);
+              }}
+              className={cn(
+                "px-3 py-1.5 text-left font-mono text-xs flex items-center justify-between gap-3",
+                value === m.id
+                  ? "bg-main text-main-foreground"
+                  : "bg-background hover:bg-secondary-background",
+              )}
+            >
+              <span>{m.label}</span>
+              <span className="text-[9px] opacity-50">{m.id}</span>
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+            className={cn(
+              "px-3 py-1.5 text-left font-mono text-xs border-t-2 border-border",
+              value == null
+                ? "bg-main text-main-foreground"
+                : "bg-background hover:bg-secondary-background",
+            )}
+          >
+            Default ({HARNESS_LABELS[harness] ?? harness})
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A tool_result pairs with its tool_call, and an unbroken run of tool
+// activity within a turn condenses into ONE group item — rendered as a
+// single dynamic row while streaming, a "N tool calls" dropdown once done.
+type ToolPair = { call: Msg | null; result: Msg | null };
 type Item =
   | { type: "msg"; msg: Msg }
-  | { type: "tool"; call: Msg | null; result: Msg | null };
+  | { type: "tools"; turn: number; tools: ToolPair[] };
 
 function groupMessages(messages: Msg[]): Item[] {
   const items: Item[] = [];
+  const tailGroup = (turn: number) => {
+    const last = items[items.length - 1];
+    return last?.type === "tools" && last.turn === turn ? last : null;
+  };
   for (const m of messages) {
     if (m.kind === "tool_call") {
-      items.push({ type: "tool", call: m, result: null });
+      const g = tailGroup(m.turn);
+      if (g) g.tools.push({ call: m, result: null });
+      else items.push({ type: "tools", turn: m.turn, tools: [{ call: m, result: null }] });
     } else if (m.kind === "tool_result") {
-      const last = items[items.length - 1];
-      if (last?.type === "tool" && last.result === null && last.call?.turn === m.turn) {
-        last.result = m;
-      } else {
-        items.push({ type: "tool", call: null, result: m });
-      }
+      const g = tailGroup(m.turn);
+      // pair with the earliest unresolved call (parallel batches emit all
+      // calls, then all results — FIFO is the stream order)
+      const open = g?.tools.find((t) => t.call !== null && t.result === null);
+      if (open) open.result = m;
+      else if (g) g.tools.push({ call: null, result: m });
+      else items.push({ type: "tools", turn: m.turn, tools: [{ call: null, result: m }] });
     } else {
       items.push({ type: "msg", msg: m });
     }
@@ -122,7 +259,13 @@ function groupMessages(messages: Msg[]): Item[] {
 }
 
 function itemTurn(it: Item): number {
-  return it.type === "msg" ? it.msg.turn : (it.call ?? it.result)!.turn;
+  return it.type === "msg" ? it.msg.turn : it.turn;
+}
+
+// "mcp__agentic-sls__printer_status" → "printer_status"
+function bareToolName(n: string | null | undefined): string {
+  if (!n) return "tool";
+  return n.includes("__") ? n.slice(n.lastIndexOf("__") + 2) : n;
 }
 
 // The right-hand artifact panel is the agent-curated set (conversation_artifacts,
@@ -132,6 +275,7 @@ function itemTurn(it: Item): number {
 function convArtifactToArtifact(a: ConvArtifact): Artifact {
   if (a.artifact_type === "build") return { kind: "build", buildId: a.artifact_id };
   if (a.artifact_type === "profile") return { kind: "profile", profileId: a.artifact_id };
+  if (a.artifact_type === "powder_tuning") return { kind: "powder_tuning" };
   return { kind: "job", jobId: a.artifact_id };
 }
 
@@ -183,16 +327,103 @@ function ToolRow({ call, result }: { call: Msg | null; result: Msg | null }) {
   );
 }
 
+// A condensed run of tool calls. Three shapes:
+//  - streaming: ONE row that dynamically shows the tool currently running
+//    (count ticks up as calls land) — no expansion while in flight;
+//  - done, single call: the plain ToolRow, no extra chrome;
+//  - done, several calls: one "N tool calls" dropdown row; open it to
+//    navigate the individual (expandable) tool rows.
+function ToolGroupRow({ tools, streaming }: { tools: ToolPair[]; streaming: boolean }) {
+  const errors = tools.filter((t) => t.call?.is_error || t.result?.is_error).length;
+
+  if (streaming) {
+    const current = tools[tools.length - 1]!;
+    const running = current.result === null && current.call !== null;
+    return (
+      <div className="border border-border/50 rounded-base font-mono text-[11px] bg-secondary-background/40 px-2 py-1 flex items-center gap-1.5 opacity-80">
+        <span className="relative flex size-2 shrink-0" aria-hidden>
+          <span className={cn("absolute inline-flex h-full w-full rounded-full bg-main", running && "animate-ping opacity-75")} />
+          <span className="relative inline-flex size-2 rounded-full bg-main" />
+        </span>
+        <span className="font-heading shrink-0">{bareToolName(current.call?.tool_name)}</span>
+        <span className="truncate opacity-60">{current.call ? inputPreview(current.call.tool_input) : ""}</span>
+        <span className="ml-auto shrink-0 opacity-50">
+          {tools.length > 1 ? `${tools.length} calls` : running ? "running" : "done"}
+        </span>
+      </div>
+    );
+  }
+
+  if (tools.length === 1) return <ToolRow call={tools[0]!.call} result={tools[0]!.result} />;
+
+  // unique bare names, in first-use order, for the summary line
+  const names: string[] = [];
+  for (const t of tools) {
+    const n = bareToolName(t.call?.tool_name);
+    if (!names.includes(n)) names.push(n);
+  }
+  const namesPreview = names.slice(0, 3).join(", ") + (names.length > 3 ? ", …" : "");
+
+  return (
+    <details
+      className={cn(
+        "group border rounded-base font-mono text-[11px] bg-secondary-background/40",
+        errors > 0 ? "border-red-500" : "border-border/50",
+      )}
+    >
+      <summary className="cursor-pointer select-none px-2 py-1 flex items-center gap-1.5 opacity-70 hover:opacity-100 list-none [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-3 shrink-0 transition-transform group-open:rotate-90" />
+        <span className="font-heading shrink-0">{tools.length} tool calls</span>
+        <span className="truncate opacity-60">{namesPreview}</span>
+        {errors > 0 && (
+          <span className="ml-auto shrink-0 text-red-600">
+            {errors} error{errors > 1 ? "s" : ""}
+          </span>
+        )}
+      </summary>
+      <div className="border-t border-border/50 px-1.5 py-1.5 grid gap-1">
+        {tools.map((t, i) => (
+          <ToolRow key={i} call={t.call} result={t.result} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// Copy with a legacy fallback: navigator.clipboard needs a secure context,
+// and the dashboard is also reached over plain http from other machines on
+// the LAN — execCommand still works there.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+}
+
 // Per-turn thumbs on the model's response — the pointwise SFT signal. Clicking
 // the active thumb again clears it. Rendered once at the end of each completed
-// turn (never on the live, still-streaming turn).
+// turn (never on the live, still-streaming turn). copyText is the turn's
+// assistant prose (tool rows excluded); no prose → no copy button.
 function FeedbackBar({
   rating,
   onRate,
+  copyText,
 }: {
   rating: Rating | null;
   onRate: (r: Rating | null) => void;
+  copyText: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
   const btn = (r: Rating, label: string, Icon: typeof ThumbsUp) => (
     <button
       title={label}
@@ -207,10 +438,31 @@ function FeedbackBar({
       <Icon className="size-3.5" />
     </button>
   );
+  const copy = async () => {
+    if (!copyText || copied) return;
+    if (await copyToClipboard(copyText)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
   return (
     <div className="flex items-center gap-1 pt-1 pl-1">
       {btn("up", "Good response", ThumbsUp)}
       {btn("down", "Bad response", ThumbsDown)}
+      {copyText && (
+        <button
+          title={copied ? "Copied" : "Copy response"}
+          onClick={() => void copy()}
+          className={cn(
+            "rounded-base border-2 p-1 transition-colors",
+            copied
+              ? "bg-main border-border"
+              : "border-transparent opacity-40 hover:opacity-100 hover:border-border/40",
+          )}
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </button>
+      )}
     </div>
   );
 }
@@ -272,6 +524,118 @@ function AlertCard({
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+// The transcript body, memo'd (2026-07-30 lag hunt): the parent re-renders
+// on every composer keystroke / timer tick / poll; unchanged messages must
+// not re-reconcile. Props only change when a turn streams or completes.
+const TranscriptItems = memo(function TranscriptItems({
+  items,
+  busy,
+  persistedMaxTurn,
+  turnText,
+  ratings,
+  onRate,
+}: {
+  items: Item[];
+  busy: boolean;
+  persistedMaxTurn: number;
+  turnText: Map<number, string>;
+  ratings: Record<number, Rating | null>;
+  onRate: (turn: number, r: Rating | null) => void;
+}) {
+  let prevTurn = 0;
+  return (
+    <>
+      {items.map((it, i) => {
+        const turn = itemTurn(it);
+        const newTurn = turn !== prevTurn && prevTurn !== 0;
+        prevTurn = turn;
+        // last row of a completed turn gets the response thumbs
+        const lastOfTurn = i === items.length - 1 || itemTurn(items[i + 1]) !== turn;
+        const showFeedback = lastOfTurn && turn > 0 && turn <= persistedMaxTurn;
+        return (
+          <div key={i}>
+            {newTurn && (
+              <div className="flex items-center gap-2 my-3 opacity-40">
+                <div className="flex-1 border-t border-border" />
+                <span className="text-[9px] font-mono uppercase tracking-wider">turn {turn}</span>
+                <div className="flex-1 border-t border-border" />
+              </div>
+            )}
+            {it.type === "tools" ? (
+              <ToolGroupRow tools={it.tools} streaming={busy && i === items.length - 1} />
+            ) : (
+              <MessageItem m={it.msg} />
+            )}
+            {showFeedback && (
+              <FeedbackBar
+                rating={ratings[turn] ?? null}
+                onRate={(r) => void onRate(turn, r)}
+                copyText={turnText.get(turn) ?? null}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
+// The composer owns its input state (2026-07-30 lag hunt): keystrokes used
+// to setState on the page component and re-render the entire transcript.
+// Now a keypress re-renders exactly this row.
+function Composer({
+  harness,
+  busy,
+  onSend,
+  onStop,
+}: {
+  harness: string;
+  busy: boolean;
+  onSend: (text: string) => void;
+  onStop: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  // keep the composer height in sync with its content (also resets it after
+  // a send clears the input)
+  useEffect(() => {
+    autosize(taRef.current);
+  }, [input]);
+  const submit = () => {
+    const t = input.trim();
+    if (!t || busy) return;
+    setInput("");
+    onSend(t);
+  };
+  return (
+    <div className="max-w-3xl mx-auto p-2 flex gap-2 items-end">
+      <Textarea
+        ref={taRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        rows={1}
+        placeholder={`Message ${harness}…`}
+        className="flex-1 resize-none min-h-0 max-h-40 text-xs font-mono"
+      />
+      {busy ? (
+        <Button onClick={onStop} variant="neutral" size="sm" title="Stop this turn">
+          Stop
+        </Button>
+      ) : (
+        <Button onClick={submit} disabled={!input.trim()} variant="default" size="sm">
+          Send
+        </Button>
+      )}
     </div>
   );
 }
@@ -372,9 +736,16 @@ function NewChatDraft() {
   const navigate = useNavigate();
   const [harness, setHarness] = useState<(typeof CHAT_HARNESSES)[number]>("claude");
   const [debug, setDebug] = useState(false);
+  const [mode, setModeChoice] = useState<ApprovalMode>("ask");
+  const [model, setModel] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [harnessMenu, setHarnessMenu] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const breadcrumbSlot =
+    typeof document !== "undefined" ? document.getElementById("breadcrumb-actions") : null;
 
   const start = async () => {
     const message = input.trim();
@@ -392,6 +763,24 @@ function NewChatDraft() {
       if (d.conversationId == null) {
         throw new Error("broker has no database — chat would not be recorded");
       }
+      // Persist the chosen approval mode BEFORE the first turn fires, so the
+      // opening message already runs under it ("ask" is the backend default).
+      if (mode !== "ask") {
+        await fetch(`/agent/conversations/${d.conversationId}/mode`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode }),
+        }).catch(() => {}); // non-fatal: the conversation page can still switch
+      }
+      // Likewise the model override — set before the first turn so the
+      // opening message already runs on the chosen model.
+      if (model) {
+        await fetch(`/agent/conversations/${d.conversationId}/model`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model }),
+        }).catch(() => {}); // non-fatal: falls back to the harness default
+      }
       refreshConversations();
       navigate(`/conversations/${d.conversationId}`, {
         replace: true,
@@ -403,68 +792,128 @@ function NewChatDraft() {
     }
   };
 
-  const pick = (
-    label: string,
-    values: readonly string[],
-    current: string,
-    set: (v: string) => void,
-  ) => (
-    <div className="flex items-center gap-1 font-mono text-xs">
-      <span className="opacity-50 w-16 text-right mr-1">{label}</span>
-      {values.map((v) => (
-        <button
-          key={v}
-          onClick={() => set(v)}
-          className={cn(
-            "px-2 py-1 rounded border border-border",
-            current === v ? "bg-accent" : "opacity-60 hover:opacity-100",
-          )}
-        >
-          {v}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
     <div className="h-full min-h-0 flex flex-col items-center justify-center gap-4 p-4">
       <div className="font-heading text-lg">New conversation</div>
-      {pick("harness", CHAT_HARNESSES, harness, (v) => setHarness(v as typeof harness))}
-      <label className="flex items-center gap-2 font-mono text-xs cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={debug}
-          onChange={(e) => setDebug(e.target.checked)}
-          className="accent-main size-3.5"
-        />
-        <span className={debug ? "" : "opacity-60"}>
-          debug — dev/test conversation, excluded from the dataset export
-        </span>
-      </label>
-      <div className="w-full max-w-xl flex gap-2 items-end">
-        <Textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void start();
-            }
-          }}
-          rows={3}
-          autoFocus
-          placeholder={`Message ${harness}…`}
-          className="flex-1 resize-none min-h-0 text-xs font-mono"
-        />
-        <Button onClick={() => void start()} disabled={!input.trim() || busy} variant="default" size="sm">
-          {busy ? "…" : "Send"}
-        </Button>
+
+      {/* composer row — mirrors the conversation page: one-line auto-grow
+          textarea beside a split Send button whose dropdown picks the harness */}
+      <div className="w-full max-w-3xl">
+        <div className="flex gap-2 items-start">
+          <div className="flex-1 min-w-0">
+            <Textarea
+              ref={taRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                autosize(taRef.current);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void start();
+                }
+              }}
+              rows={1}
+              autoFocus
+              placeholder={`Message ${harness}…`}
+              className="w-full resize-none min-h-0 max-h-40 text-xs font-mono"
+            />
+            {/* mode tabs + model picker under the text box, like the
+                conversation page */}
+            <div className="pt-2 flex items-start justify-between gap-2">
+              <ModeTabs value={mode} onChange={setModeChoice} />
+              <ModelPicker harness={harness} value={model} onChange={setModel} />
+            </div>
+          </div>
+          <div className="relative flex shrink-0">
+            {/* not visually disabled on empty input — start() already
+                no-ops without a message, and the greyed look was noise */}
+            <Button
+              onClick={() => void start()}
+              disabled={busy}
+              variant="default"
+              size="sm"
+              className="rounded-r-none gap-1.5"
+              title={`Send to ${HARNESS_LABELS[harness] ?? harness}`}
+            >
+              <HarnessIcon harness={harness} />
+              {busy ? "…" : "Send"}
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="rounded-l-none border-l-0 px-1.5"
+              title="Choose harness"
+              onClick={() => setHarnessMenu((o) => !o)}
+            >
+              <ChevronRight className={cn("size-3.5 transition-transform", harnessMenu ? "-rotate-90" : "rotate-90")} />
+            </Button>
+            {harnessMenu && (
+              <div className="absolute bottom-full right-0 mb-1.5 z-20 min-w-40 border-2 border-border rounded-base bg-background shadow-shadow overflow-hidden flex flex-col">
+                {CHAT_HARNESSES.map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => {
+                      setHarness(h);
+                      setModel(null); // catalogs differ per harness
+                      setHarnessMenu(false);
+                      taRef.current?.focus();
+                    }}
+                    className={cn(
+                      "px-3 py-1.5 text-left font-mono text-xs flex items-center gap-2",
+                      h === harness
+                        ? "bg-main text-main-foreground"
+                        : "bg-background hover:bg-secondary-background",
+                    )}
+                  >
+                    <HarnessIcon harness={h} />
+                    {HARNESS_LABELS[h] ?? h}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
       </div>
-      <div className="text-[10px] font-mono opacity-50 max-w-xl text-center">
-        Nothing is recorded until you send — the chat and its conversation
-        record are created with the first message.
-      </div>
+
       {err && <div className="text-red-600 text-[10px] font-mono">{err}</div>}
+
+      {/* draft settings — cog in the breadcrumb row (top right), modal owns
+          the debug toggle */}
+      {breadcrumbSlot &&
+        createPortal(
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="Conversation settings"
+            className={cn(
+              "flex items-center gap-1 rounded-base border-2 px-2 py-1 text-[10px] font-mono uppercase",
+              debug ? "bg-main border-border" : "border-border/40 opacity-50 hover:opacity-100",
+            )}
+          >
+            <SettingsIcon className="size-3.5" />
+            {debug ? "debug" : null}
+          </button>,
+          breadcrumbSlot,
+        )}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Conversation settings</DialogTitle>
+          </DialogHeader>
+          <label className="flex items-center justify-between gap-4 cursor-pointer select-none">
+            <span className="flex flex-col gap-0.5">
+              <span className="font-heading text-sm">Debug</span>
+              <span className="text-[10px] font-mono opacity-60 max-w-56">
+                Dev/test conversation — excluded from the dataset export;
+                created jobs/profiles get a [DEBUG] name prefix.
+              </span>
+            </span>
+            <Switch checked={debug} onCheckedChange={setDebug} />
+          </label>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -486,25 +935,17 @@ function ExistingConversation({ id }: { id: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState<Msg[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [input, setInput] = useState("");
   // response ratings keyed by turn number; synced from the server, then
   // optimistically updated on click
   const [ratings, setRatings] = useState<Record<number, Rating | null>>({});
   // build-scoped defect alerts for this conversation's attached build(s)
   const [alerts, setAlerts] = useState<BuildAlert[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
   // aborts the in-flight SSE fetch so Stop unsticks the client even if the
   // stream is half-open (e.g. the broker restarted mid-turn)
   const abortRef = useRef<AbortController | null>(null);
   // seconds elapsed in the current turn, for the live activity indicator
   const [elapsed, setElapsed] = useState(0);
-
-  // keep the composer height in sync with its content (also resets it after a
-  // send clears `input`)
-  useEffect(() => {
-    autosize(taRef.current);
-  }, [input]);
 
   // ── right-hand artifact panel ──
   // The conversation's artifacts: the agent-curated pinned set (jobs, builds,
@@ -575,8 +1016,9 @@ function ExistingConversation({ id }: { id: string }) {
   }, [live]);
 
   // thumbs on a model response (per turn) — optimistic; clicking the active
-  // thumb passes null, which clears the row server-side
-  const rate = async (turn: number, r: Rating | null) => {
+  // thumb passes null, which clears the row server-side. useCallback: passed
+  // into the memo'd transcript, so its identity must be stable.
+  const rate = useCallback(async (turn: number, r: Rating | null) => {
     setRatings((prev) => ({ ...prev, [turn]: r }));
     try {
       await fetch(`/agent/conversations/${id}/feedback`, {
@@ -587,7 +1029,28 @@ function ExistingConversation({ id }: { id: string }) {
     } catch {
       /* next load re-syncs true state */
     }
-  };
+  }, [id]);
+
+  // Transcript inputs, memo'd (2026-07-30 lag hunt): the parent re-renders on
+  // every composer keystroke, elapsed-timer tick, and poll — recomputing the
+  // grouping and reconciling the whole transcript made typing visibly laggy
+  // on long conversations. These only change when messages actually change.
+  const dataMessages = data?.messages;
+  const items = useMemo(() => {
+    const msgs = dataMessages ?? [];
+    return groupMessages(live ? [...msgs, ...live] : msgs);
+  }, [dataMessages, live]);
+  const turnText = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const msg of dataMessages ?? []) {
+      if (msg.kind === "assistant" && msg.content) {
+        const prev = m.get(msg.turn);
+        m.set(msg.turn, prev ? `${prev}\n\n${msg.content}` : msg.content);
+      }
+    }
+    return m;
+  }, [dataMessages]);
+  const persistedMaxTurn = dataMessages?.at(-1)?.turn ?? 0;
 
   // Poll build-scoped defect alerts for this conversation's attached build(s).
   // The bell/silence toggle (below) controls whether they SURFACE, not whether
@@ -599,7 +1062,16 @@ function ExistingConversation({ id }: { id: string }) {
         const r = await fetch(`/agent/conversations/${id}/alerts`);
         if (!r.ok || cancelled) return;
         const d = (await r.json()) as { alerts?: BuildAlert[] };
-        if (!cancelled) setAlerts(d.alerts ?? []);
+        if (cancelled) return;
+        // bail out when unchanged — a fresh array identity every tick would
+        // re-render the page (same trap as the approvals poll)
+        setAlerts((prev) => {
+          const next = d.alerts ?? [];
+          return prev.length === next.length &&
+            prev.every((a, i) => a.id === next[i]?.id && a.status === next[i]?.status)
+            ? prev
+            : next;
+        });
       } catch { /* broker unreachable — next tick retries */ }
     };
     void tick();
@@ -657,6 +1129,7 @@ function ExistingConversation({ id }: { id: string }) {
   // Claude Code's permission prompt.
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
   useEffect(() => {
     if (!interactive) return;
     let cancelled = false;
@@ -664,10 +1137,24 @@ function ExistingConversation({ id }: { id: string }) {
       try {
         const r = await fetch(`/agent/conversations/${id}/approvals`);
         if (!r.ok || cancelled) return;
-        const d = (await r.json()) as { mode?: ApprovalMode; pending?: PendingApproval[] };
+        const d = (await r.json()) as {
+          mode?: ApprovalMode;
+          pending?: PendingApproval[];
+          modelOverride?: string | null;
+        };
         if (cancelled) return;
         setApprovalMode(d.mode ?? "ask");
-        setPendingApprovals(d.pending ?? []);
+        // bail out when nothing changed — a fresh array identity every 2 s
+        // re-rendered the ENTIRE transcript (every Markdown re-parsed);
+        // measured at ~27% main-thread busy on an idle conversation page
+        setPendingApprovals((prev) => {
+          const next = d.pending ?? [];
+          return prev.length === next.length &&
+            prev.every((a, i) => a.id === next[i]?.id)
+            ? prev
+            : next;
+        });
+        setModelOverride(d.modelOverride ?? null);
       } catch { /* broker unreachable — next tick retries */ }
     };
     void tick();
@@ -685,6 +1172,16 @@ function ExistingConversation({ id }: { id: string }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mode }),
+      });
+    } catch { /* next poll restores true state */ }
+  };
+  const setModel = async (model: string | null) => {
+    setModelOverride(model); // optimistic; the poll re-syncs
+    try {
+      await fetch(`/agent/conversations/${id}/model`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model }),
       });
     } catch { /* next poll restores true state */ }
   };
@@ -718,12 +1215,13 @@ function ExistingConversation({ id }: { id: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- send changes every render; autoSent guards
   }, [data, location.state]);
 
-  const send = async (text?: string) => {
-    const message = (text ?? input).trim();
+  // text always comes from the caller now — the Composer owns the input
+  // state and clears it before invoking us
+  const send = async (text: string) => {
+    const message = text.trim();
     if (!message || busy || !data) return;
     setBusy(true);
     setErr(null);
-    if (text === undefined) setInput("");
     const turn = (data.messages.at(-1)?.turn ?? 0) + 1;
     const acc: Msg[] = [
       { turn, seq: 0, ts: "", kind: "user", content: message, tool_name: null, tool_input: null, is_error: null },
@@ -814,11 +1312,8 @@ function ExistingConversation({ id }: { id: string }) {
   }
   if (!data) return <div className="p-4 text-xs opacity-60">Loading conversation…</div>;
 
-  const { conversation: c, messages, builds } = data;
-  const items = groupMessages(live ? [...messages, ...live] : messages);
-  // only persisted turns get a thumbs bar — never the live, still-streaming one
-  const persistedMaxTurn = messages.at(-1)?.turn ?? 0;
-  let prevTurn = 0;
+  const { conversation: c, builds } = data;
+  // items / turnText / persistedMaxTurn are memo'd above the early returns
 
   const muted = c.alerts_muted;
   const activeAlerts = alerts.filter((a) => a.status === "new");
@@ -869,32 +1364,6 @@ function ExistingConversation({ id }: { id: string }) {
             >
               debug
             </button>
-            {interactive && (
-              <span className="flex items-center gap-1 text-[10px] font-mono">
-                <span className="opacity-50">mode</span>
-                {(["ask", "auto", "plan"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => void setMode(m)}
-                    title={
-                      m === "ask"
-                        ? "Ask — mutating tools need your approval"
-                        : m === "auto"
-                          ? "Auto — run mutating tools without asking"
-                          : "Plan — refuse mutating tools (read-only)"
-                    }
-                    className={cn(
-                      "px-1.5 py-0.5 rounded-base border-2 uppercase",
-                      approvalMode === m
-                        ? "bg-main border-border"
-                        : "border-border/40 opacity-50 hover:opacity-100",
-                    )}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </span>
-            )}
             {c.model && <span className="text-[10px] font-mono opacity-60">{c.model}</span>}
             {builds.length > 0 && (
               <span className="text-[10px] font-mono opacity-60">
@@ -919,29 +1388,14 @@ function ExistingConversation({ id }: { id: string }) {
           {/* font-sans: chat prose reads as a document; the app's mono base
               stays on tool rows/events, which set font-mono themselves */}
           <div className="flex flex-col gap-2 text-sm font-sans">
-            {items.map((it, i) => {
-              const turn = itemTurn(it);
-              const newTurn = turn !== prevTurn && prevTurn !== 0;
-              prevTurn = turn;
-              // last row of a completed turn gets the response thumbs
-              const lastOfTurn = i === items.length - 1 || itemTurn(items[i + 1]) !== turn;
-              const showFeedback = lastOfTurn && turn > 0 && turn <= persistedMaxTurn;
-              return (
-                <div key={i}>
-                  {newTurn && (
-                    <div className="flex items-center gap-2 my-3 opacity-40">
-                      <div className="flex-1 border-t border-border" />
-                      <span className="text-[9px] font-mono uppercase tracking-wider">turn {turn}</span>
-                      <div className="flex-1 border-t border-border" />
-                    </div>
-                  )}
-                  {it.type === "tool" ? <ToolRow call={it.call} result={it.result} /> : <MessageItem m={it.msg} />}
-                  {showFeedback && (
-                    <FeedbackBar rating={ratings[turn] ?? null} onRate={(r) => void rate(turn, r)} />
-                  )}
-                </div>
-              );
-            })}
+            <TranscriptItems
+              items={items}
+              busy={busy}
+              persistedMaxTurn={persistedMaxTurn}
+              turnText={turnText}
+              ratings={ratings}
+              onRate={rate}
+            />
             {busy && (
               <div className="border-2 border-dashed border-border rounded-base px-3 py-2 flex items-center gap-2 font-mono text-xs">
                 <span className="inline-flex gap-0.5" aria-hidden>
@@ -1006,30 +1460,20 @@ function ExistingConversation({ id }: { id: string }) {
 
       {interactive && (
         <div className="shrink-0">
-          <div className="max-w-3xl mx-auto p-2 flex gap-2 items-end">
-            <Textarea
-              ref={taRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              rows={1}
-              placeholder={`Message ${c.harness}…`}
-              className="flex-1 resize-none min-h-0 max-h-40 text-xs font-mono"
+          <Composer
+            harness={c.harness}
+            busy={busy}
+            onSend={(t) => void send(t)}
+            onStop={() => void stop()}
+          />
+          <div className="max-w-3xl mx-auto px-2 pb-2 flex items-start justify-between gap-2">
+            <ModeTabs value={approvalMode} onChange={(m) => void setMode(m)} />
+            <ModelPicker
+              harness={c.harness}
+              value={modelOverride}
+              observed={c.model}
+              onChange={(m) => void setModel(m)}
             />
-            {busy ? (
-              <Button onClick={() => void stop()} variant="neutral" size="sm" title="Stop this turn">
-                Stop
-              </Button>
-            ) : (
-              <Button onClick={() => void send()} disabled={!input.trim()} variant="default" size="sm">
-                Send
-              </Button>
-            )}
           </div>
           {err && <div className="max-w-3xl mx-auto px-2 pb-1 text-red-600 text-[10px]">{err}</div>}
         </div>

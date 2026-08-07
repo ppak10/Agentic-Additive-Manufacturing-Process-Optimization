@@ -17,6 +17,8 @@ const EXPECTED_TOOLS = [
   "recoater_full_passes_set",
   "layer_overrides_get",
   "layer_overrides_set",
+  "setup_overrides_get",
+  "setup_overrides_set",
   "job_list",
   "job_get",
   "job_set",
@@ -24,6 +26,14 @@ const EXPECTED_TOOLS = [
   "profile_list",
   "profile_get",
   "profile_set",
+  "powder_tuning_status",
+  "powder_tuning_print_setup",
+  "powder_tuning_bed_level",
+  "powder_tuning_add_layer",
+  "powder_tuning_set_surface",
+  "powder_tuning_select_patch",
+  "powder_tuning_print_patch",
+  "powder_tuning_stop",
   "builds_list",
   "build_get",
   "astm_query",
@@ -38,8 +48,10 @@ const READ_ONLY_TOOLS = [
   "recoater_passes_get",
   "recoater_full_passes_get",
   "layer_overrides_get",
+  "setup_overrides_get",
   "job_list",
   "profile_list",
+  "powder_tuning_status",
 ];
 
 // Knowledge tools hit the recorder Postgres (DATABASE_URL), not the printer
@@ -110,6 +122,46 @@ for (const [name, args] of DATA_GUARDS) {
   } else {
     console.error(`FAIL ${name} guard did not reject: ${JSON.stringify(args)}`);
     failures += 1;
+  }
+}
+
+// Powder-tuning guards. Schema-level rejections (out-of-range values) fail
+// before any HTTP request, so they are safe regardless of session state; the
+// SDK may surface them as a thrown InvalidParams error rather than isError.
+async function expectRejected(name: string, args: Record<string, unknown>) {
+  try {
+    const res = await client.callTool({ name, arguments: args });
+    if (res.isError) {
+      console.log(`ok   ${name} rejected ${JSON.stringify(args)}`);
+    } else {
+      console.error(`FAIL ${name} guard did not reject: ${JSON.stringify(args)}`);
+      failures += 1;
+    }
+  } catch {
+    console.log(`ok   ${name} rejected ${JSON.stringify(args)} (schema)`);
+  }
+}
+await expectRejected("powder_tuning_set_surface", { temperature: 500 });
+await expectRejected("powder_tuning_select_patch", { grid_index: -1 });
+await expectRejected("powder_tuning_print_patch", { laser_on_percent: 150 });
+
+// Only when no session is active: the no-session 400 must gate every
+// powder-tuning command. print_setup is the probe — it cannot fire the laser
+// even if the gate were broken and a session started concurrently.
+{
+  const st = await client.callTool({ name: "powder_tuning_status", arguments: {} });
+  const active = !st.isError && (JSON.parse(
+    ((st.content as Array<{ text?: string }>)?.[0]?.text ?? "{}"),
+  ) as { data?: { isActive?: boolean } }).data?.isActive;
+  if (active) {
+    console.log("skip powder-tuning no-session guard (session is active)");
+  } else {
+    const res = await client.callTool({ name: "powder_tuning_print_setup", arguments: {} });
+    if (res.isError) console.log("ok   powder_tuning_print_setup rejected without a session");
+    else {
+      console.error("FAIL powder_tuning_print_setup succeeded without a session");
+      failures += 1;
+    }
   }
 }
 

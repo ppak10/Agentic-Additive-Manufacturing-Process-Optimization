@@ -48,6 +48,21 @@ change by watching the following layer, not the current one.
    the profile value. Saved overrides persist across firmware config reloads,
    so leftover overrides outlive the moment; clean up when done.
 
+## Laser energy and temperatures mid-print (setup overrides)
+
+Recoating mechanics are `layer_overrides_*`; **laser energy and phase
+temperature targets are a separate channel**: `setup_overrides_get` /
+`setup_overrides_set` (the firmware's native mid-print tuning surface).
+Knobs: `totalEnergyDensityPercent` (1–500, the global energy scaler — the
+cleanest single lever), `laserFillEnergyDensity` (0–100 mJ/mm),
+`laserOutlineEnergyDensities` (array, entries 0–100), and the bed-prep /
+begin-layer / print-cap temperature targets (0–200 °C, hard policy cap).
+Same discipline as layer overrides: read first (`defaults` carries the
+running profile's baseline), change take effect next layer, `null` reverts
+to profile — but note these are **reset to empty at every print start**
+(nothing staged while idle survives), and unlike layer overrides they do
+NOT persist across prints.
+
 ## Units and conventions
 
 - TimeSpan knobs are **fractional seconds** over the API.

@@ -273,12 +273,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // moved to the API service — phase 3. The camera/bedmatrix/position *WebSocket*
   // proxies below stay: they are live-stream fan-outs tied to this process.
 
+  // 500 ms + skip-unchanged (2026-07-28 lag hunt): this used to push the
+  // full snapshot every 100 ms whether or not it changed — 10 Hz × ~7 KB of
+  // JSON per browser tab, and every message re-rendered the consumer's
+  // React subtree. Temps move on multi-second timescales; 2 Hz is plenty.
   app.get("/api/stream", { websocket: true }, (socket) => {
+    let lastSent: unknown = null;
     const interval = setInterval(() => {
       if (socket.readyState !== socket.OPEN) return;
       const snap = getLatestSnapshot();
-      if (snap) socket.send(JSON.stringify(snap));
-    }, 100);
+      if (snap && snap !== lastSent) {
+        lastSent = snap;
+        socket.send(JSON.stringify(snap));
+      }
+    }, 500);
     socket.on("close", () => clearInterval(interval));
   });
 
@@ -300,7 +308,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     client.on("error", () => upstream.close());
   };
 
-  app.get("/api/temperature/bedmatrix/stream", { websocket: true }, proxyPluginWs("/temperature/bedmatrix/stream"));
+  // Default hz=6 when the client doesn't ask for decimation: the plugin's
+  // undecimated stream runs at ~111 Hz (measured 2026-07-28 — far above the
+  // Mlx90640's real ~6 Hz), and every frame is an ~8 KB JSON parse in the
+  // browser. Clients that want more can still pass their own ?hz=.
+  app.get("/api/temperature/bedmatrix/stream", { websocket: true }, (client, req) => {
+    const query = req.query as Record<string, string>;
+    if (!query.hz) query.hz = "6";
+    proxyPluginWs("/temperature/bedmatrix/stream")(client, req);
+  });
 
   // Chamber camera stream — binary JPEG frames from the plugin's /camera/stream.
   // Uses a separate proxy handler that passes Buffer data through as-is rather
@@ -599,6 +615,67 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       }
     },
   );
+
+  // Graceful job stop — Mission Control's stop button (2026-07-28). GET
+  // relays the firmware's soft-cancel state (allowed modes vary by phase);
+  // POST relays the request and logs operator_action — a stop is the
+  // strongest override there is, so it belongs in the training labels.
+  // The plugin refuses modes outside SoftCancelAllowedModes with a 400,
+  // which is passed through for the UI to display.
+  app.get("/api/printing/cancel", httpProxy("/printing/cancel"));
+  app.post<{ Body: { mode?: string } }>(
+    "/api/printing/soft-cancel",
+    async (req, reply) => {
+      if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+        return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+      }
+      const mode = req.body?.mode;
+      if (typeof mode !== "string" || !mode) {
+        return reply.code(400).send({ error: "body.mode (string) required" });
+      }
+      try {
+        const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/soft-cancel`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        if (r.status === 400) return reply.code(400).send(await r.json());
+        if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+        const data = await r.json();
+        void recordOperatorAction("soft_cancel", { mode }, app.log);
+        return data;
+      } catch (err) {
+        tripUpstream(config.INOVA_API_BASE_URL);
+        const msg = (err as Error)?.message ?? String(err);
+        return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+      }
+    },
+  );
+
+  // Hard stop — the firmware GUI's "Stop immediately!" (BackgroundTask
+  // cancel: laser off, job abandoned on the spot; no cap, no controlled
+  // cooling). Logged like the soft modes — mode 'Immediate'.
+  app.post("/api/printing/hard-cancel", async (_req, reply) => {
+    if (isUpstreamOpen(config.INOVA_API_BASE_URL)) {
+      return reply.code(502).send({ error: "upstream unreachable (breaker open)" });
+    }
+    try {
+      const r = await fetch(`${config.INOVA_API_BASE_URL}/printing/hard-cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (r.status === 400) return reply.code(400).send(await r.json());
+      if (!r.ok) return reply.code(502).send({ error: "upstream", status: r.status });
+      const data = await r.json();
+      void recordOperatorAction("soft_cancel", { mode: "Immediate" }, app.log);
+      return data;
+    } catch (err) {
+      tripUpstream(config.INOVA_API_BASE_URL);
+      const msg = (err as Error)?.message ?? String(err);
+      return reply.code(502).send({ error: "upstream unreachable", detail: msg });
+    }
+  });
 
   // Job / profile / powder-tuning CRUD proxies moved to the GUI API service
   // (services/api, :3400) 2026-07-20 — recorder→api phase 3. The mid-print

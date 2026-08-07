@@ -53,8 +53,6 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
         { label: hint ?? `Job ${rest[0].slice(0, 8)}` },
       ];
     }
-    case "powder-tuning":
-      return [{ label: "Powder Tuning" }];
     case "tasks":
       return [
         { label: "Tasks", to: "/tasks" },
@@ -93,7 +91,13 @@ function crumbsFor(pathname: string, hint?: string): Crumb[] {
       return [{ label: "Research" }, { label: "Tests" }];
     case "research": {
       const out: Crumb[] = [{ label: "Research" }];
-      if (rest[0]) out.push({ label: rest[0][0].toUpperCase() + rest[0].slice(1) });
+      if (rest[0]) {
+        const label =
+          rest[0] === "process-map"
+            ? "Process Map"
+            : rest[0][0].toUpperCase() + rest[0].slice(1);
+        out.push({ label });
+      }
       return out;
     }
     default:

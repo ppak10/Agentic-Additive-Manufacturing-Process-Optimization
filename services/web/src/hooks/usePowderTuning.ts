@@ -10,6 +10,13 @@ export interface TuningStatus {
   laserOnPercent: number | null;
   totalEnergyDensityPercent: number | null;
   recoaterPasses: number | null;
+  // plugin ≥ 2026-07-27: live surface-heater target (null = heater off) and
+  // whether it has been reached, plus bed positions. Optional so the panel
+  // degrades gracefully against an older plugin.
+  surfaceTarget?: number | null;
+  surfaceTargetReached?: boolean | null;
+  z1?: number | null;
+  z2?: number | null;
 }
 
 export interface PrintSetupSnapshot {
@@ -26,6 +33,9 @@ export interface PrintSetupSnapshot {
   powderTuningGridDim: number;
   powderTuningGridMargin: number;
   powderTuningDepth: number;
+  hotspotOverlapPercent?: number;
+  outlinePowerIncrease?: number;
+  fillOutlineSkipCount?: number;
 }
 
 export interface PatchResult {
@@ -44,6 +54,9 @@ export interface PrintParams {
   laserOutlineSpeedXY?: number;
   outlineCount?: number;
   fillPhase?: number;
+  hotspotOverlapPercent?: number;
+  outlinePowerIncrease?: number;
+  fillOutlineSkipCount?: number;
   printNumberEnabled?: boolean;
 }
 
@@ -55,7 +68,7 @@ export interface UsePowderTuning {
   patchResults: PatchResult[];       // completed patches (local session state)
   selectedPatch: number | null;
   bedLevel: (opts?: { stepThickness?: number; stepCount?: number; dryPrint?: boolean }) => Promise<void>;
-  addLayer: (opts?: { temperatureTarget?: number; temperatureDelaySeconds?: number; sinteredVolumeFactor?: number }) => Promise<void>;
+  addLayer: (opts?: { layerThickness?: number; temperatureTarget?: number; temperatureDelaySeconds?: number; sinteredVolumeFactor?: number }) => Promise<void>;
   setSurface: (temperature: number) => Promise<void>;
   selectPatch: (gridIndex: number) => Promise<void>;
   fetchPrintSetup: () => Promise<PrintSetupSnapshot>;
@@ -125,7 +138,7 @@ export function usePowderTuning(): UsePowderTuning {
     run(() => post<{ ok: boolean }>("/api/powder-tuning/bed-level", opts ?? {}).then(() => {})),
   [run]);
 
-  const addLayer = useCallback((opts?: { temperatureTarget?: number; temperatureDelaySeconds?: number; sinteredVolumeFactor?: number }) =>
+  const addLayer = useCallback((opts?: { layerThickness?: number; temperatureTarget?: number; temperatureDelaySeconds?: number; sinteredVolumeFactor?: number }) =>
     run(() => post<{ ok: boolean }>("/api/powder-tuning/layer", opts ?? {}).then(() => {})),
   [run]);
 

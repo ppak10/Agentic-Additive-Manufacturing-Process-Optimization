@@ -22,10 +22,17 @@ export interface StateSnapshot {
 }
 export interface Timed<T> { respondedAt: string; data: T }
 
+// Client-side throttle: the recorder relays snapshots up to 10 Hz (2 Hz
+// after the 2026-07-28 relay fix deploys), and every accepted message
+// re-renders each consumer. Temps/positions move on second timescales —
+// cap accepted updates at ~2.5 Hz and skip the JSON.parse for the rest.
+const MIN_UPDATE_MS = 400;
+
 export function useStream(): { snapshot: Timed<StateSnapshot> | null; connected: boolean } {
   const [snapshot, setSnapshot] = useState<Timed<StateSnapshot> | null>(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const lastAccepted = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +45,9 @@ export function useStream(): { snapshot: Timed<StateSnapshot> | null; connected:
       wsRef.current = ws;
       ws.onopen = () => { setConnected(true); backoff = 1000; };
       ws.onmessage = (e) => {
+        const now = Date.now();
+        if (now - lastAccepted.current < MIN_UPDATE_MS) return;
+        lastAccepted.current = now;
         try { setSnapshot(JSON.parse(e.data) as Timed<StateSnapshot>); } catch { /* ignore */ }
       };
       ws.onclose = () => {

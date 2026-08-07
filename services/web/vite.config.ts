@@ -26,6 +26,7 @@ export default defineConfig({
       // migrating off the recorder. Each moved route gets its own prefix here,
       // ahead of the generic /api → recorder fallback (first prefix match wins).
       "/api/astm": { target: "http://localhost:3400" },
+      "/api/process-map": { target: "http://localhost:3400" },
       "/api/registry": { target: "http://localhost:3400" },
       "/api/datasets/summary": { target: "http://localhost:3400" },
       "/api/calibration": { target: "http://localhost:3400" },

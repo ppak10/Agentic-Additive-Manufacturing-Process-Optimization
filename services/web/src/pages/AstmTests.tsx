@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Search } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,13 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { ChartContainer } from "@/components/ui/chart";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { exportChart, type ChartExportFormat } from "@/lib/chartExport";
 
 // Tests — the human-facing view of every ASTM specimen we've collected
 // (astm_specimens, flattened metrics). Served by /api/astm; one row per tested
@@ -109,12 +116,13 @@ function SortHead({
 // figure).
 
 // Same palette as the dataset's scripts/plots/_lib.py BATCH_COLORS, so batch C
-// is the same green here as in the published figures.
-const BATCH_COLORS: Record<string, string> = {
+// is the same green here as in the published figures. Exported: the Process
+// Map page colors its specimen points by the same batch palette.
+export const BATCH_COLORS: Record<string, string> = {
   A: "#1f77b4", B: "#ff7f0e", C: "#2ca02c", D: "#d62728", E: "#9467bd",
   F: "#8c564b", G: "#e377c2", H: "#bcbd22", I: "#17becf", J: "#aec7e8", J_MB: "#08519c",
 };
-const CONTROL_COLOR = "#7f7f7f"; // FormLabs / non-batch
+export const CONTROL_COLOR = "#7f7f7f"; // FormLabs / non-batch
 const FILAMENT_CONTROLS = new Set(["PLA", "PETG"]);
 
 interface Curve {
@@ -138,6 +146,7 @@ function AstmChart() {
   const [standard, setStandard] = useState<"D638" | "D790">("D790");
   const [resp, setResp] = useState<CurveResp | null>(null);
   const [loading, setLoading] = useState(true);
+  const chartAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +172,21 @@ function AstmChart() {
     [resp],
   );
 
+  // Legend chips toggle whole batches/groups on and off; hidden groups drop
+  // out of the chart, the X domain, and the export.
+  const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (k: string) =>
+    setHiddenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const visibleSpecimens = useMemo(
+    () => specimens.filter((s) => !hiddenGroups.has(groupKey(s))),
+    [specimens, hiddenGroups],
+  );
+
   // Wide format for recharts: each row is a strain value holding every
   // specimen's stress there (null past that specimen's break → its line ends).
   const data = useMemo(
@@ -183,17 +207,17 @@ function AstmChart() {
     const grid = resp?.grid ?? [];
     let lastIdx = 0;
     for (let i = 0; i < grid.length; i++) {
-      if (specimens.some((s) => s.stress[i] != null)) lastIdx = i;
+      if (visibleSpecimens.some((s) => s.stress[i] != null)) lastIdx = i;
     }
     return grid[lastIdx] ?? 1;
-  }, [resp, specimens]);
+  }, [resp, visibleSpecimens]);
 
   // One legend entry per batch/group (not per specimen), SLS batches then FormLabs.
   const legend = useMemo(() => {
-    const seen = new Map<string, { label: string; color: string }>();
+    const seen = new Map<string, { key: string; label: string; color: string }>();
     for (const s of specimens) {
       const k = groupKey(s);
-      if (!seen.has(k)) seen.set(k, { label: groupLabel(s), color: seriesColor(s.batch) });
+      if (!seen.has(k)) seen.set(k, { key: k, label: groupLabel(s), color: seriesColor(s.batch) });
     }
     return [...seen.entries()]
       .sort((a, b) =>
@@ -204,9 +228,20 @@ function AstmChart() {
 
   // ChartContainer forces black stroke on every path; override per-specimen to
   // the batch color (scoped to this card, wins on specificity + !important).
-  const strokeCss = specimens
+  const strokeCss = visibleSpecimens
     .map((s, i) => `.astm-lines .ln-${i} .recharts-curve{stroke:${seriesColor(s.batch)}!important}`)
     .join("");
+
+  // Same export pipeline as the Process Map page: current chart svg + the
+  // batch legend redrawn as native svg elements.
+  const handleExport = (format: ChartExportFormat) => {
+    if (!chartAreaRef.current) return;
+    void exportChart(chartAreaRef.current, format, `astm-stress-strain-${standard}`, {
+      items: legend
+        .filter((l) => !hiddenGroups.has(l.key))
+        .map((l) => ({ color: l.color, label: l.label })),
+    }).catch(() => {});
+  };
 
   return (
     <Card className="shrink-0">
@@ -214,7 +249,7 @@ function AstmChart() {
         <CardTitle className="text-sm">
           Stress–strain composite
           <span className="ml-2 font-base opacity-60">
-            {standard === "D638" ? "tensile · D638" : "3-pt flex · D790"} · {specimens.length} specimens
+            {standard === "D638" ? "tensile · D638" : "3-pt flex · D790"} · {visibleSpecimens.length} specimens
           </span>
         </CardTitle>
         <div className="flex gap-1">
@@ -237,10 +272,32 @@ function AstmChart() {
         ) : specimens.length === 0 ? (
           <div className="py-8 text-center text-sm opacity-60">No curves for {standard}.</div>
         ) : (
-          <div className="astm-lines">
+          <div ref={chartAreaRef} className="astm-lines relative">
             <style dangerouslySetInnerHTML={{ __html: strokeCss }} />
-            <ChartContainer config={{}} className="h-[300px] w-full">
-              <LineChart data={data} margin={{ left: 8, right: 12, top: 8, bottom: 16 }}>
+            <div className="absolute right-2 top-2 z-10">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="neutral" className="h-7 px-2 text-xs" title="Export chart">
+                    <Download className="size-3.5" />
+                    Export
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {(["png", "svg", "pdf"] as const).map((f) => (
+                    <DropdownMenuItem
+                      key={f}
+                      className="text-xs uppercase"
+                      onClick={() => handleExport(f)}
+                    >
+                      {f}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <ChartContainer config={{}} className="aspect-square w-full">
+              <LineChart data={data} margin={{ left: 12, right: 12, top: 8, bottom: 40 }}>
                 <CartesianGrid strokeOpacity={0.3} />
                 <XAxis
                   dataKey="strain"
@@ -252,16 +309,17 @@ function AstmChart() {
                   tickMargin={8}
                   className="text-xs"
                   tickFormatter={(v) => Number(v).toFixed(3)}
-                  label={{ value: "Strain (mm/mm)", position: "insideBottom", offset: -8, fontSize: 11 }}
+                  label={{ value: "Strain (mm/mm)", position: "insideBottom", offset: -26, fontSize: 14 }}
                 />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
-                  width={44}
+                  width={70}
+                  tickCount={12}
                   className="text-xs"
-                  label={{ value: "Stress (MPa)", angle: -90, position: "insideLeft", fontSize: 11 }}
+                  label={{ value: "Stress (MPa)", angle: -90, position: "insideLeft", fontSize: 14 }}
                 />
-                {specimens.map((s, i) => (
+                {visibleSpecimens.map((s, i) => (
                   <Line
                     key={s.sample_id}
                     className={`ln-${i}`}
@@ -278,15 +336,27 @@ function AstmChart() {
               </LineChart>
             </ChartContainer>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-              {legend.map((l) => (
-                <span key={l.label} className="inline-flex items-center gap-1 text-[11px]">
-                  <span
-                    className="inline-block h-2 w-3 rounded-[1px] border border-border"
-                    style={{ background: l.color }}
-                  />
-                  {l.label}
-                </span>
-              ))}
+              {legend.map((l) => {
+                const hidden = hiddenGroups.has(l.key);
+                return (
+                  <button
+                    key={l.key}
+                    type="button"
+                    onClick={() => toggleGroup(l.key)}
+                    title={hidden ? "Show group" : "Hide group"}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-1 text-[11px]",
+                      hidden && "opacity-40 line-through",
+                    )}
+                  >
+                    <span
+                      className="inline-block h-2 w-3 rounded-[1px] border border-border"
+                      style={{ background: l.color }}
+                    />
+                    {l.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

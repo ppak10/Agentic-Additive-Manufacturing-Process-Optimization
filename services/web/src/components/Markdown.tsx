@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
@@ -5,8 +6,12 @@ import { cn } from "@/lib/utils";
 // Shared markdown renderer for agent-authored text (assistant messages,
 // panel candidates/advisors). Compact styling tuned to sit inside the
 // existing text-xs mono message blocks — no @tailwindcss/typography dep.
+//
+// memo'd (2026-07-28 lag hunt): remark parsing is the expensive part, and
+// transcript pages re-render on poll ticks / stream events — unchanged text
+// must not re-parse. Props are a string + className; shallow compare is exact.
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
   return (
     <div className={cn("markdown break-words", className)}>
       <ReactMarkdown
@@ -62,4 +67,4 @@ export function Markdown({ text, className }: { text: string; className?: string
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -18,6 +18,7 @@ import { useActiveBuild } from "@/hooks/useActiveBuild";
 import { useJobInstances } from "@/hooks/useJobInstances";
 import { JobBuild3D, PartViewer3D } from "@/panels/JobPreview3D";
 import { JobPanel } from "@/panels/JobPanel";
+import { PowderTuningArtifact } from "@/panels/PowderTuningArtifact";
 import { ChamberThermalPane } from "@/pages/MissionControl";
 
 // Artifact panel — the docked right-hand "things of concern", the printer-
@@ -38,7 +39,8 @@ export type Artifact =
   | { kind: "job"; jobId: string }
   | { kind: "build"; buildId: string }
   | { kind: "profile"; profileId: string }
-  | { kind: "chamber" };
+  | { kind: "chamber" }
+  | { kind: "powder_tuning" };
 
 // Stable identity — the tab value, the ?artifact= URL token, and the key used
 // for ordering / auto-switch. Must round-trip through artifactFromKey.
@@ -52,6 +54,8 @@ export function artifactKey(a: Artifact): string {
       return `profile:${a.profileId}`;
     case "chamber":
       return "chamber";
+    case "powder_tuning":
+      return "powder_tuning";
   }
 }
 
@@ -59,6 +63,7 @@ export function artifactKey(a: Artifact): string {
 // Null for unknown tokens so a stale URL param is simply ignored.
 export function artifactFromKey(key: string): Artifact | null {
   if (key === "chamber") return { kind: "chamber" };
+  if (key === "powder_tuning") return { kind: "powder_tuning" };
   const i = key.indexOf(":");
   if (i < 0) return null;
   const id = key.slice(i + 1);
@@ -80,6 +85,8 @@ function tabLabel(a: Artifact): string {
   switch (a.kind) {
     case "chamber":
       return "Mission Control";
+    case "powder_tuning":
+      return "Powder Tuning";
     case "job":
       return `Job · ${a.jobId.slice(0, 4)}`;
     case "build":
@@ -389,6 +396,8 @@ function ArtifactBody({ artifact }: { artifact: Artifact }) {
     <div className="h-full overflow-y-auto p-3">
       {artifact.kind === "job" ? (
         <JobArtifact key={artifact.jobId} jobId={artifact.jobId} />
+      ) : artifact.kind === "powder_tuning" ? (
+        <PowderTuningArtifact />
       ) : (
         <ProfileArtifact key={artifact.profileId} profileId={artifact.profileId} />
       )}

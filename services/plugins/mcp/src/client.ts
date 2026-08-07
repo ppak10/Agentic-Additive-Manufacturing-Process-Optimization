@@ -24,16 +24,22 @@ export class InovaClient {
     private readonly timeoutMs = 10_000,
   ) {}
 
-  async get<T>(path: string): Promise<Timed<T>> {
-    return this.request<Timed<T>>(path, { method: "GET" });
+  // timeoutMs overrides the default for endpoints that block on physical
+  // printer operations (powder-tuning surface/layer/print run for minutes).
+  async get<T>(path: string, timeoutMs?: number): Promise<Timed<T>> {
+    return this.request<Timed<T>>(path, { method: "GET" }, timeoutMs);
   }
 
-  async post<T>(path: string, body: unknown): Promise<Timed<T>> {
-    return this.request<Timed<T>>(path, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  async post<T>(path: string, body: unknown, timeoutMs?: number): Promise<Timed<T>> {
+    return this.request<Timed<T>>(
+      path,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      timeoutMs,
+    );
   }
 
   // The /jobs and /profiles routes return bare JSON — no Timed envelope.
@@ -65,10 +71,14 @@ export class InovaClient {
     });
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    timeoutMs?: number,
+  ): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
     });
     const text = await res.text();
     if (!res.ok) throw new InovaApiError(res.status, text, path);

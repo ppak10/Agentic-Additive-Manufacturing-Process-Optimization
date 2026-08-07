@@ -21,8 +21,13 @@ import { errorResult, jsonResult } from "../result.js";
 // artifact_list can report "the operator is looking at this right now" without
 // any per-click database write.
 
-export type ArtifactType = "build" | "job" | "profile";
-const ARTIFACT_TYPES = ["build", "job", "profile"] as const;
+export type ArtifactType = "build" | "job" | "profile" | "powder_tuning";
+const ARTIFACT_TYPES = ["build", "job", "profile", "powder_tuning"] as const;
+
+// powder_tuning is a singleton view (the live tuning session), not a reference
+// to a stored entity — its id is always the constant below so add/remove/focus
+// agree on one row per conversation.
+export const POWDER_TUNING_ARTIFACT_ID = "session";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS conversation_artifacts (
@@ -81,11 +86,50 @@ function conversationId(): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// Debug-conversation naming: content created from a debug-flagged
+// conversation (agent_conversations.debug) carries a "[DEBUG] " name prefix
+// so the operator can find and delete it later. Enforced HERE at the MCP
+// chokepoint — creation tools call debugName() on every name they persist —
+// so no harness can forget the convention. Cached per process (one MCP
+// server per turn; the flag doesn't flip mid-turn).
+export const DEBUG_MARK = "[DEBUG]";
+let debugFlag: Promise<boolean> | null = null;
+
+export function isDebugConversation(): Promise<boolean> {
+  if (debugFlag) return debugFlag;
+  debugFlag = (async () => {
+    const convId = conversationId();
+    const pool = convId != null ? getWritePool() : null;
+    if (convId == null || !pool) return false;
+    await ready;
+    try {
+      const { rows } = await pool.query<{ debug: boolean }>(
+        "SELECT debug FROM agent_conversations WHERE id = $1",
+        [convId],
+      );
+      return rows[0]?.debug === true;
+    } catch {
+      return false; // unknown → don't mangle names
+    }
+  })();
+  return debugFlag;
+}
+
+// Apply the debug prefix to a to-be-created name (no-op outside a debug
+// conversation; never double-prefixes).
+export async function debugName(name: string): Promise<string> {
+  if (!(await isDebugConversation())) return name;
+  return name.startsWith(DEBUG_MARK) ? name : `${DEBUG_MARK} ${name}`;
+}
+
 // Parse the operator's focused tab ("type:id") from AGENTIC_FOCUS. Only ids
 // without a colon are expected (build numbers, UUIDs), so split on the first.
 function focusedArtifact(): { type: string; id: string } | null {
   const raw = process.env.AGENTIC_FOCUS;
   if (!raw) return null;
+  // singleton tabs travel as a bare token (no ":id")
+  if (raw === "powder_tuning")
+    return { type: "powder_tuning", id: POWDER_TUNING_ARTIFACT_ID };
   const i = raw.indexOf(":");
   if (i < 0) return null;
   const type = raw.slice(0, i);
@@ -138,6 +182,7 @@ async function validate(
         ? null
         : `no print profile with id ${id} on the printer`;
     }
+    if (type === "powder_tuning") return null; // singleton — nothing to look up
     // build
     if (!/^\d+$/.test(id)) return `build id must be numeric, got "${id}"`;
     const { rows } = await pool.query("SELECT 1 FROM builds WHERE id = $1", [id]);
@@ -158,14 +203,18 @@ export function registerPrinterArtifacts(server: McpServer, client: InovaClient)
         "Attaching does NOT create or print anything — it only references something " +
         "that already exists (use it to pull up an old build, a candidate profile, " +
         "or a job you just created). The id is validated against the printer/" +
-        "recorder before it's pinned. Use artifact_list to see what's already there " +
+        "recorder before it's pinned. type=powder_tuning pins the live powder-" +
+        "tuning session view (patch grid + chamber); its id is ignored — pass " +
+        "\"session\". Use artifact_list to see what's already there " +
         "and artifact_remove to clear one. No-op outside an interactive conversation.",
       inputSchema: {
         type: z.enum(ARTIFACT_TYPES).describe("Artifact kind to pin."),
         id: z
           .string()
           .min(1)
-          .describe("job/profile UUID or numeric build id (validated live)."),
+          .describe(
+            "job/profile UUID or numeric build id (validated live); \"session\" for powder_tuning.",
+          ),
         note: z
           .string()
           .optional()
@@ -173,6 +222,7 @@ export function registerPrinterArtifacts(server: McpServer, client: InovaClient)
       },
     },
     async ({ type, id, note }) => {
+      if (type === "powder_tuning") id = POWDER_TUNING_ARTIFACT_ID;
       const convId = conversationId();
       if (convId == null) {
         return jsonResult({
@@ -211,6 +261,7 @@ export function registerPrinterArtifacts(server: McpServer, client: InovaClient)
       },
     },
     async ({ type, id }) => {
+      if (type === "powder_tuning") id = POWDER_TUNING_ARTIFACT_ID;
       const convId = conversationId();
       if (convId == null) {
         return jsonResult({ status: "noop", message: "Not inside a conversation." });
