@@ -296,7 +296,7 @@ function AstmChart() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-            <ChartContainer config={{}} className="aspect-square w-full">
+            <ChartContainer config={{}} className="aspect-[2/1] w-full">
               <LineChart data={data} margin={{ left: 12, right: 12, top: 8, bottom: 40 }}>
                 <CartesianGrid strokeOpacity={0.3} />
                 <XAxis
